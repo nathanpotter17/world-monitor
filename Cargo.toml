@@ -1,0 +1,8 @@
+[package]
+name = "world-monitor"
+version = "0.1.0"
+edition = "2021"
+description = "Minimal world news dashboard — local web server, Claude API for drill-down"
+
+# Zero external dependencies. TLS handled by shelling out to curl.
+[dependencies]

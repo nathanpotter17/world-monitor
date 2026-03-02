@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Monitor</title>
+<style>
+:root{--bg:#0a0f14;--sf:#111820;--sf2:#1a222d;--bd:#2a3444;--tx:#d4dae4;--tx2:#8892a2;
+--ac:#4a9eff;--ac2:#2a7de1;--gn:#34d399;--yl:#fbbf24;--rd:#f87171;--or:#fb923c;--pr:#a78bfa;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font-family:-apple-system,'Segoe UI',system-ui,sans-serif;line-height:1.5}
+
+.top{background:var(--sf);border-bottom:1px solid var(--bd);padding:8px 20px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100}
+.top h1{font-size:15px;font-weight:600;letter-spacing:.06em}
+.top em{color:var(--ac);font-style:normal}
+.tr{display:flex;align-items:center;gap:10px}
+.badge{font-size:10px;padding:2px 8px;border-radius:3px;text-transform:uppercase;letter-spacing:.05em;font-weight:600}
+.b-ready{background:#1a2e1a;color:var(--gn);border:1px solid #2a4a2a}
+.b-loading{background:#2e2a1a;color:var(--yl);border:1px solid #4a3a2a}
+.b-off{background:var(--sf2);color:var(--tx2);border:1px solid var(--bd)}
+.b-err{background:#2e1a1a;color:var(--rd);border:1px solid #4a2a2a}
+.bud{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx2)}
+.bar{width:60px;height:5px;background:var(--sf2);border-radius:3px;overflow:hidden}
+.fill{height:100%;background:var(--gn);border-radius:3px;transition:width .3s,background .3s}
+.fill.w{background:var(--yl)}.fill.d{background:var(--rd)}
+button{background:var(--sf2);color:var(--tx);border:1px solid var(--bd);padding:5px 12px;border-radius:5px;cursor:pointer;font-size:12px;transition:background .15s}
+button:hover{background:var(--bd)}button:disabled{opacity:.4;cursor:not-allowed}
+.pri{background:var(--ac2);border-color:var(--ac);color:#fff}.pri:hover{background:var(--ac)}
+.danger{background:#4a1a1a;border-color:var(--rd);color:var(--rd)}.danger:hover{background:#5a2a2a}
+
+.cmd{background:var(--sf);border-bottom:1px solid var(--bd);padding:8px 20px}
+.cmd-row{max-width:960px;margin:0 auto;display:flex;gap:8px;align-items:center}
+.cmd-input{flex:1;background:var(--bg);border:1px solid var(--bd);color:var(--tx);padding:8px 12px;border-radius:6px;font-size:13px;outline:none}
+.cmd-input:focus{border-color:var(--ac)}.cmd-input::placeholder{color:var(--tx2)}
+.cmd-send{padding:8px 16px;font-size:13px}
+.chips{max-width:960px;margin:6px auto 0;display:flex;gap:6px;flex-wrap:wrap}
+.chip{background:var(--sf2);border:1px solid var(--bd);color:var(--tx2);padding:3px 10px;border-radius:12px;font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.chip:hover{background:var(--bd);color:var(--tx)}
+
+.ai-panel{max-width:960px;margin:0 auto;padding:12px 20px;display:none}
+.ai-panel.open{display:block}
+.ai-box{background:var(--sf);border:1px solid var(--bd);border-radius:8px;padding:14px 16px;position:relative}
+.ai-box .ai-label{font-size:10px;color:var(--pr);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center}
+.ai-box .ai-text{font-size:13px;line-height:1.7;white-space:pre-wrap}
+.ai-box .ai-meta{font-size:10px;color:var(--tx2);margin-top:8px}
+.ai-close{background:none;border:none;color:var(--tx2);cursor:pointer;font-size:14px;padding:0 4px}
+
+.main{max-width:960px;margin:0 auto;padding:20px}
+.empty{text-align:center;padding:50px 20px;color:var(--tx2)}
+.empty h2{font-size:18px;color:var(--tx);margin-bottom:6px}
+.empty p{margin-bottom:12px;font-size:13px}
+.meta{font-size:11px;color:var(--tx2);padding:8px 0 16px;border-bottom:1px solid var(--bd);margin-bottom:16px;display:flex;justify-content:space-between}
+
+.cat{margin-bottom:20px}
+.ch{display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--bd);margin-bottom:4px}
+.ci{font-size:16px}.ct{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--tx2)}.cc{font-size:10px;color:var(--tx2);margin-left:auto}
+.it{padding:8px 10px;border-radius:5px;cursor:pointer;transition:background .12s;display:flex;align-items:flex-start;gap:10px}
+.it:hover{background:var(--sf)}
+.dot{width:5px;height:5px;border-radius:50%;margin-top:7px;flex-shrink:0}
+.itx{flex:1;min-width:0}
+.ih{font-size:13px;font-weight:500}
+.im{font-size:11px;color:var(--tx2);margin-top:1px;display:flex;gap:8px;flex-wrap:wrap}
+.is{background:var(--sf2);padding:0 5px;border-radius:2px;font-size:10px}
+.isu{font-size:11px;color:var(--tx2);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.ov{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:200;display:none;align-items:center;justify-content:center}
+.ov.open{display:flex}
+.dp{background:var(--sf);border:1px solid var(--bd);border-radius:10px;width:min(640px,92vw);max-height:85vh;overflow-y:auto;padding:20px}
+.dp h2{font-size:16px;margin-bottom:10px;padding-right:30px}
+.dp .det{font-size:13px;line-height:1.7;white-space:pre-wrap}
+.dp .src{margin-top:14px;font-size:11px;color:var(--tx2)}
+.dp .rel{margin-top:10px;display:flex;flex-wrap:wrap;gap:5px}
+.dp .dm{margin-top:12px;font-size:10px;color:var(--tx2)}
+.rt{background:var(--sf2);border:1px solid var(--bd);padding:2px 8px;border-radius:10px;font-size:11px;cursor:pointer;transition:background .12s}
+.rt:hover{background:var(--bd)}
+.dc{float:right;background:none;border:none;color:var(--tx2);font-size:18px;cursor:pointer}
+.dl{display:inline-block;margin-top:8px;font-size:12px;color:var(--ac);text-decoration:none}.dl:hover{text-decoration:underline}
+
+/* Settings panel */
+.sp{position:fixed;top:0;right:-420px;width:400px;height:100vh;background:var(--sf);border-left:1px solid var(--bd);z-index:300;padding:20px;transition:right .25s;overflow-y:auto}
+.sp.open{right:0}
+.sp-close{position:absolute;top:12px;right:16px;background:none;border:none;color:var(--tx2);font-size:20px;cursor:pointer;padding:4px 8px}
+.sp-close:hover{color:var(--tx)}
+.sp h3{font-size:14px;margin-bottom:10px;margin-top:4px}
+.sg{margin-bottom:10px}
+.sg label{display:block;font-size:11px;color:var(--tx2);margin-bottom:2px}
+.sg input,.sg select{width:100%;background:var(--bg);border:1px solid var(--bd);color:var(--tx);padding:5px 8px;border-radius:4px;font-size:12px}
+.sg select{appearance:auto}
+.sg .hint{font-size:10px;color:var(--tx2);margin-top:2px}
+.sep{border:none;border-top:1px solid var(--bd);margin:14px 0}
+
+.llama-status{display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg);border:1px solid var(--bd);border-radius:6px;margin-bottom:10px}
+.ls-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.ls-dot.ready{background:var(--gn)}
+.ls-dot.starting{background:var(--yl);animation:p 1s ease-in-out infinite}
+.ls-dot.stopped{background:var(--tx2)}
+.ls-dot.error{background:var(--rd)}
+.ls-text{font-size:12px;flex:1}
+.ls-detail{font-size:10px;color:var(--tx2)}
+
+.pg{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pg .sg{margin-bottom:0}
+.pg3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.pg3 .sg{margin-bottom:0}
+
+.diag-row{font-size:11px;padding:3px 0;display:flex;gap:8px;border-bottom:1px solid var(--bd)}
+.diag-name{width:120px;flex-shrink:0;font-weight:500;color:var(--tx)}
+.diag-ok{color:var(--gn)}.diag-fail{color:var(--rd)}
+
+.ld{text-align:center;padding:20px;color:var(--tx2);font-size:13px}
+@keyframes p{0%,100%{opacity:.4}50%{opacity:1}}
+.ld span{animation:p 1.2s ease-in-out infinite;font-size:18px}.ld span:nth-child(2){animation-delay:.2s}.ld span:nth-child(3){animation-delay:.4s}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--sf2);border:1px solid var(--bd);padding:6px 14px;border-radius:6px;font-size:11px;color:var(--tx2);opacity:0;transition:opacity .2s;z-index:400}
+.toast.v{opacity:1}
+.sp-overlay{position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:250;display:none}.sp-overlay.open{display:block}
+</style>
+</head>
+<body>
+
+<div class="top">
+<h1><em>&#x2295;</em> WORLD MONITOR</h1>
+<div class="tr">
+<span class="badge b-off" id="badge">OFF</span>
+<div class="bud"><span id="bl">&mdash;</span><span id="bt" style="color:var(--yl);display:none"></span><div class="bar"><div class="fill" id="bf"></div></div></div>
+<button class="pri" id="sb" onclick="scan()">&#x27f3; Scan</button>
+<button onclick="togSP()">&#x2699;</button>
+</div>
+</div>
+
+<div class="cmd">
+<div class="cmd-row">
+<input class="cmd-input" id="qi" placeholder="Ask about the news..." onkeydown="if(event.key==='Enter')ask()">
+<button class="cmd-send pri" onclick="ask()">Ask AI</button>
+</div>
+<div class="chips">
+<span class="chip" onclick="askQ('Summarize all headlines in 3 sentences')">&#x1f4cb; Summarize All</span>
+<span class="chip" onclick="askQ('What are the most significant geopolitics stories?','Geopolitics')">&#x1f30d; Geopolitics</span>
+<span class="chip" onclick="askQ('What are the top tech and AI stories?','Tech & AI')">&#x1f916; Tech & AI</span>
+<span class="chip" onclick="askQ('Summarize the markets and economy headlines','Markets')">&#x1f4c8; Markets</span>
+<span class="chip" onclick="askQ('What are the key science headlines?','Science')">&#x1f52c; Science</span>
+<span class="chip" onclick="askQ('Any security alerts or OSINT news?','Security')">&#x1f512; Security</span>
+<span class="chip" onclick="askQ('Find connections or common themes across all categories')">&#x1f517; Cross-Feed</span>
+</div>
+</div>
+
+<div class="ai-panel" id="aip">
+<div class="ai-box">
+<div class="ai-label"><span>&#x1f916; AI Response</span><button class="ai-close" onclick="closeAI()">&times;</button></div>
+<div class="ai-text" id="ait"></div>
+<div class="ai-meta" id="aim"></div>
+</div>
+</div>
+
+<div class="main">
+<div class="empty" id="em">
+<h2>World Monitor</h2>
+<p><strong>Layer 0</strong> &mdash; RSS feeds (always works)<br>
+<strong>Layer 1</strong> &mdash; Local AI via embedded llama-server + .gguf model</p>
+<p style="font-size:11px">Click <strong>Scan</strong> to fetch feeds. Open <strong>Settings</strong> to pick a model.</p>
+<button class="pri" onclick="scan()" style="margin-top:8px">&#x27f3; Scan Feeds</button>
+</div>
+<div id="hl"></div>
+</div>
+
+<div class="ov" id="ov" onclick="cdrill(event)">
+<div class="dp"><button class="dc" onclick="cdrill()">&times;</button><div id="drc"></div></div>
+</div>
+
+<div class="sp-overlay" id="spo" onclick="closeSP()"></div>
+
+<!-- Settings panel -->
+<div class="sp" id="sp">
+<button class="sp-close" onclick="closeSP()">&times;</button>
+
+<h3>&#x1f9e0; Model</h3>
+
+<div class="llama-status" id="llama-status">
+<div class="ls-dot stopped" id="ls-dot"></div>
+<div>
+<div class="ls-text" id="ls-text">Stopped</div>
+<div class="ls-detail" id="ls-detail">&mdash;</div>
+</div>
+</div>
+
+<div class="sg">
+<label>Model</label>
+<select id="cfg-model" onchange="onModelPick()">
+<option value="">Loading...</option>
+</select>
+</div>
+
+<!-- Server params (require reload) -->
+<div class="pg">
+<div class="sg">
+<label>GPU Layers (ngl)</label>
+<input type="number" id="cfg-ngl" value="15" min="-1" max="99">
+<div class="hint">-1 or 99 = all on GPU</div>
+</div>
+<div class="sg">
+<label>Context Size</label>
+<input type="number" id="cfg-ctx" value="4096" min="2048" step="512">
+</div>
+</div>
+<div style="margin-top:6px">
+<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;color:var(--tx2)">
+<input type="checkbox" id="cfg-fa" checked> Flash Attention
+</label>
+<div class="hint" style="margin-left:22px">Faster prompt processing (requires reload)</div>
+</div>
+
+<div style="display:flex;gap:8px;margin-top:8px">
+<button class="pri" onclick="loadModel()" style="flex:1" id="btn-load">&#x25b6; Load Model</button>
+<button class="danger" onclick="stopModel()" style="flex:1" id="btn-stop" disabled>&#x25a0; Stop</button>
+</div>
+
+<hr class="sep">
+<h3>&#x2699; Sampling Parameters</h3>
+
+<div class="pg3">
+<div class="sg">
+<label>Temperature</label>
+<input type="number" id="cfg-temp" value="0.70" min="0" max="2" step="0.05">
+</div>
+<div class="sg">
+<label>Top-K</label>
+<input type="number" id="cfg-top_k" value="40" min="0" max="200" step="1">
+</div>
+<div class="sg">
+<label>Top-P</label>
+<input type="number" id="cfg-top_p" value="0.90" min="0" max="1" step="0.05">
+</div>
+</div>
+
+<div class="pg" style="margin-top:8px">
+<div class="sg">
+<label>Repeat Penalty</label>
+<input type="number" id="cfg-repeat_penalty" value="1.10" min="0.5" max="2" step="0.05">
+</div>
+<div class="sg" style="display:flex;align-items:flex-end">
+<button onclick="saveParams()" style="width:100%">Apply Params</button>
+</div>
+</div>
+<div class="hint" style="margin-top:2px">Params apply to next AI call &mdash; no reload needed.</div>
+
+<hr class="sep">
+<h3>Budget Controls</h3>
+<div class="pg">
+<div class="sg"><label>Session limit (0=off)</label><input type="number" id="is" value="0" min="0" step="10000"></div>
+<div class="sg"><label>Daily limit (0=off)</label><input type="number" id="id" value="0" min="0" step="10000"></div>
+</div>
+<button onclick="saveLimits()" style="width:100%;margin-top:8px">Save Limits</button>
+
+<hr class="sep">
+<h3>Session Stats</h3>
+<div id="ud" style="font-size:12px;color:var(--tx2)">&mdash;</div>
+
+<hr class="sep">
+<h3>Feed Diagnostics</h3>
+<div id="diag" style="font-size:11px">Scan first</div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const CC={'Geopolitics':'#4a9eff','Tech & AI':'#a78bfa','Markets':'#34d399','Science':'#fbbf24','Security':'#f87171','Society':'#fb923c'};
+let spOpen=false, modelsCache=[];
+
+function toast(m,ms=2500){const e=document.getElementById('toast');e.textContent=m;e.classList.add('v');setTimeout(()=>e.classList.remove('v'),ms);}
+function fmtMs(ms){return ms<1000?ms+'ms':(ms/1000).toFixed(1)+'s';}
+function showTime(ms){if(!ms)return;const e=document.getElementById('bt');e.textContent=fmtMs(ms);e.style.display='inline';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',8000);}
+
+// ── Usage ──
+async function getu(){try{const d=await(await fetch('/api/usage')).json();uu(d);}catch(e){}}
+function uu(d){
+  const sl=d.session_limit||0,dl=d.daily_limit||0,st=d.sess_tok||0,dt=d.day_tok||0,ha=d.has_ai;
+  let pct=0,ls='';
+  if(sl>0){pct=Math.min(100,st/sl*100);ls=st.toLocaleString()+'/'+sl.toLocaleString();}
+  else if(dl>0){pct=Math.min(100,dt/dl*100);ls=dt.toLocaleString()+'/'+dl.toLocaleString();}
+  else if(ha){ls=st.toLocaleString()+' tok';}else{ls='Free';}
+  document.getElementById('bl').textContent=ls;
+  const f=document.getElementById('bf');f.style.width=(sl>0||dl>0)?pct+'%':'0%';
+  f.className='fill'+(pct>80?' d':pct>50?' w':'');
+  document.getElementById('is').value=sl;document.getElementById('id').value=dl;
+  document.getElementById('ud').innerHTML=
+    `Model: <b>${E(d.model||'none')}</b><br>Tokens: <b>${st.toLocaleString()}</b> sess / <b>${dt.toLocaleString()}</b> day<br>AI calls: ${d.req_count||0}<br>Feeds: ${d.n_feeds||0} ok (${d.n_items||0} items)<br>${d.last_scan?'Last scan: '+new Date(d.last_scan*1000).toLocaleTimeString():'No scans'}`;
+}
+
+// ── Llama status ──
+function updateLlamaUI(llama){
+  const dot=document.getElementById('ls-dot');
+  const txt=document.getElementById('ls-text');
+  const det=document.getElementById('ls-detail');
+  const badge=document.getElementById('badge');
+  const btnLoad=document.getElementById('btn-load');
+  const btnStop=document.getElementById('btn-stop');
+  const s=llama.status||'stopped';
+  dot.className='ls-dot '+s;
+  const labels={ready:'Ready',starting:'Loading model...',stopped:'Stopped',error:'Error'};
+  txt.textContent=labels[s]||s;
+  if(s==='ready'){
+    const mn=modelsCache.find(m=>m.filename===llama.model);
+    det.textContent=(mn?mn.name:llama.model)+' | ngl='+llama.ngl+' ctx='+llama.ctx+(llama.flash_attn?' fa=on':' fa=off')+(llama.pid?' | PID '+llama.pid:'');
+    badge.textContent='AI ON'; badge.className='badge b-ready';
+    btnLoad.disabled=false; btnStop.disabled=false;
+  } else if(s==='starting'){
+    det.textContent='Loading '+llama.model+'...';
+    badge.textContent='LOADING'; badge.className='badge b-loading';
+    btnLoad.disabled=true; btnStop.disabled=false;
+  } else if(s==='error'){
+    det.textContent=llama.error||'Unknown error';
+    badge.textContent='ERROR'; badge.className='badge b-err';
+    btnLoad.disabled=false; btnStop.disabled=false;
+  } else {
+    det.textContent='\u2014';
+    badge.textContent='OFF'; badge.className='badge b-off';
+    btnLoad.disabled=false; btnStop.disabled=true;
+  }
+}
+
+// ── Models + params ──
+async function loadModels(){
+  try{
+    const d=await(await fetch('/api/models')).json();
+    modelsCache=d.models||[];
+    const sel=document.getElementById('cfg-model');
+    sel.innerHTML='';
+    if(!modelsCache.length){
+      sel.innerHTML='<option value="">(no models in models/ dir)</option>';
+      return;
+    }
+    modelsCache.forEach(m=>{
+      const o=document.createElement('option');
+      o.value=m.filename;
+      o.textContent=m.name+' ['+m.family+']';
+      if(m.filename===d.active)o.selected=true;
+      sel.appendChild(o);
+    });
+    // Populate params from server state
+    if(d.params){
+      document.getElementById('cfg-ngl').value=d.params.ngl;
+      document.getElementById('cfg-ctx').value=d.params.ctx;
+      document.getElementById('cfg-fa').checked=d.params.flash_attn!==false;
+      document.getElementById('cfg-temp').value=d.params.temp.toFixed(2);
+      document.getElementById('cfg-top_k').value=d.params.top_k;
+      document.getElementById('cfg-top_p').value=d.params.top_p.toFixed(2);
+      document.getElementById('cfg-repeat_penalty').value=d.params.repeat_penalty.toFixed(2);
+    } else {
+      onModelPick(); // fallback to model defaults
+    }
+    if(d.llama)updateLlamaUI(d.llama);
+  }catch(e){console.error('loadModels',e);}
+}
+
+function onModelPick(){
+  const fn=document.getElementById('cfg-model').value;
+  const m=modelsCache.find(x=>x.filename===fn);
+  if(m){
+    document.getElementById('cfg-ngl').value=m.ngl;
+    document.getElementById('cfg-ctx').value=m.ctx;
+    document.getElementById('cfg-fa').checked=m.flash_attn!==false;
+    document.getElementById('cfg-temp').value=m.temp.toFixed(2);
+    document.getElementById('cfg-top_k').value=m.top_k;
+    document.getElementById('cfg-top_p').value=m.top_p.toFixed(2);
+    document.getElementById('cfg-repeat_penalty').value=m.repeat_penalty.toFixed(2);
+  }
+}
+
+function getParams(){
+  return {
+    ngl: parseInt(document.getElementById('cfg-ngl').value)||15,
+    ctx: parseInt(document.getElementById('cfg-ctx').value)||4096,
+    flash_attn: document.getElementById('cfg-fa').checked,
+    temp: parseFloat(document.getElementById('cfg-temp').value)||0.7,
+    top_k: parseInt(document.getElementById('cfg-top_k').value)||40,
+    top_p: parseFloat(document.getElementById('cfg-top_p').value)||0.9,
+    repeat_penalty: parseFloat(document.getElementById('cfg-repeat_penalty').value)||1.1,
+  };
+}
+
+async function loadModel(){
+  const fn=document.getElementById('cfg-model').value;
+  if(!fn){toast('No model selected');return;}
+  const p=getParams();
+  updateLlamaUI({status:'starting',model:fn,ngl:p.ngl,ctx:p.ctx});
+  toast('Loading model... (may take a minute)');
+  try{
+    const d=await(await fetch('/api/load',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({model:fn,...p})})).json();
+    if(d.error){toast('Error: '+d.error);updateLlamaUI(d.llama||{status:'error',error:d.error});}
+    else if(d.llama){updateLlamaUI(d.llama);toast(d.ok?'Model ready!':'Model failed to start');}
+    getu();
+  }catch(e){toast('Error: '+e.message);updateLlamaUI({status:'error',error:e.message});}
+}
+
+async function stopModel(){
+  try{await fetch('/api/stop',{method:'POST'});updateLlamaUI({status:'stopped'});toast('Model stopped');getu();}
+  catch(e){toast('Error: '+e.message);}
+}
+
+async function saveParams(){
+  const p=getParams();
+  try{
+    const d=await(await fetch('/api/params',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({temp:p.temp,top_k:p.top_k,top_p:p.top_p,repeat_penalty:p.repeat_penalty})})).json();
+    if(d.ok)toast('Params: temp='+d.temp+' top_k='+d.top_k+' top_p='+d.top_p+' rp='+d.repeat_penalty);
+    else toast('Error saving params');
+  }catch(e){toast('Error: '+e.message);}
+}
+
+// ── Settings panel ──
+function togSP(){spOpen?closeSP():openSP();}
+function openSP(){spOpen=true;document.getElementById('sp').classList.add('open');document.getElementById('spo').classList.add('open');getu();loadModels();loadDiag();}
+function closeSP(){spOpen=false;document.getElementById('sp').classList.remove('open');document.getElementById('spo').classList.remove('open');}
+
+async function saveLimits(){
+  const sl=parseInt(document.getElementById('is').value)||0,dl=parseInt(document.getElementById('id').value)||0;
+  try{const r=await(await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({session_limit:sl,daily_limit:dl})})).json();if(r.usage)uu(r.usage);toast('Limits saved');}catch(e){toast('Error');}
+}
+
+async function loadDiag(){
+  try{const d=await(await fetch('/api/diag')).json();
+    document.getElementById('diag').innerHTML=d.length?d.map(f=>{
+      const ok=f.status.includes('items')&&!f.status.includes('0 items');
+      return '<div class="diag-row"><span class="diag-name">'+E(f.feed)+'</span><span class="'+(ok?'diag-ok':'diag-fail')+'">'+E(f.status)+'</span></div>';
+    }).join(''):'Run a scan first.';
+  }catch(e){}
+}
+
+// ── Scan ──
+async function scan(){
+  const b=document.getElementById('sb'),h=document.getElementById('hl');
+  b.disabled=true;b.innerHTML='&#x27f3; ...';
+  h.innerHTML='<div class="ld"><span>&#x25cf;</span> <span>&#x25cf;</span> <span>&#x25cf;</span><p>Fetching feeds...</p></div>';
+  document.getElementById('em').style.display='none';
+  try{
+    const d=await(await fetch('/api/scan',{method:'POST'})).json();
+    if(d.error){h.innerHTML='<div class="empty"><h2>Error</h2><p>'+d.error+'</p></div>';return;}
+    const cats=d.headlines||[],total=cats.reduce((n,c)=>n+(c.items?.length||0),0);
+    h.innerHTML='<div class="meta"><span>'+d.ok+'/'+d.feeds+' feeds &middot; '+total+' headlines</span><span>'+new Date().toLocaleTimeString()+'</span></div>'+
+      cats.map(cat=>'<div class="cat"><div class="ch"><span class="ci">'+cat.icon+'</span><span class="ct">'+E(cat.category)+'</span><span class="cc">'+cat.items.length+'</span></div>'+
+        cat.items.map(i=>'<div class="it" onclick="drill(\''+A(i.headline)+'\',\''+A(i.link||'')+'\')">'+'<div class="dot" style="background:'+(CC[cat.category]||'var(--ac)')+'"></div><div class="itx">'+'<div class="ih">'+E(i.headline)+'</div><div class="im"><span class="is">'+E(i.source)+'</span>'+(i.date?'<span>'+E(i.date.substring(0,22))+'</span>':'')+'</div>'+(i.summary?'<div class="isu">'+E(i.summary)+'</div>':'')+'</div></div>').join('')+'</div>').join('');
+    toast(total+' headlines from '+d.ok+' feeds');getu();
+  }catch(e){h.innerHTML='<div class="empty"><h2>Error</h2><p>'+e.message+'</p></div>';}
+  finally{b.disabled=false;b.innerHTML='&#x27f3; Scan';}
+}
+
+// ── AI Ask ──
+function askQ(q,cat){document.getElementById('qi').value=q;ask(cat);}
+async function ask(cat){
+  const qi=document.getElementById('qi'),q=qi.value.trim();
+  if(!q){toast('Type a question first');return;}
+  const aip=document.getElementById('aip'),ait=document.getElementById('ait'),aim=document.getElementById('aim');
+  aip.classList.add('open');
+  ait.innerHTML='<div class="ld"><span>&#x25cf;</span> <span>&#x25cf;</span> <span>&#x25cf;</span></div>';
+  aim.textContent='';
+  try{
+    const payload={query:q};if(cat)payload.category=cat;
+    const d=await(await fetch('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).json();
+    ait.textContent=d.answer||d.error||'No response';
+    const parts=[];
+    if(d.tokens)parts.push(d.tokens.toLocaleString()+' tokens');
+    if(d.elapsed_ms)parts.push(fmtMs(d.elapsed_ms));
+    aim.textContent=parts.join(' · ')||'local';
+    if(d.elapsed_ms)toast((d.tokens?d.tokens.toLocaleString()+' tok · ':'')+fmtMs(d.elapsed_ms));
+    showTime(d.elapsed_ms);
+    getu();
+  }catch(e){ait.textContent='Error: '+e.message;}
+}
+function closeAI(){document.getElementById('aip').classList.remove('open');}
+
+// ── Drill ──
+async function drill(t,l){
+  const o=document.getElementById('ov'),c=document.getElementById('drc');
+  o.classList.add('open');c.innerHTML='<div class="ld"><span>&#x25cf;</span> <span>&#x25cf;</span> <span>&#x25cf;</span></div>';
+  try{
+    const d=await(await fetch('/api/drill',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic:t,link:l})})).json();
+    if(d.error){c.innerHTML='<h2>Error</h2><p>'+d.error+'</p>';return;}
+    const info=d.drill||{},M={'ai+page':'\u{1f916} AI + article','ai':'\u{1f916} AI analysis','page':'\u{1f4c4} Scraped (free)','none':'\u{26a0} Unavailable'};
+    c.innerHTML='<h2>'+E(info.title||t)+'</h2><div class="det">'+E(info.detail||'')+'</div>'+
+      (l?'<a class="dl" href="'+E(l)+'" target="_blank">\u{2192} Source</a>':'')+
+      (info.sources?.length?'<div class="src">Sources: '+info.sources.map(E).join(', ')+'</div>':'')+
+      (info.related?.length?'<div class="rel">'+info.related.map(r=>'<span class="rt" onclick="event.stopPropagation();cdrill();drill(\''+A(r)+'\',\'\')">'+E(r)+'</span>').join('')+'</div>':'')+
+      '<div class="dm">'+(M[d.mode]||d.mode)+' \u{00b7} '+(d.tokens?d.tokens.toLocaleString()+' tok':'free')+(d.elapsed_ms?' \u{00b7} '+fmtMs(d.elapsed_ms):'')+'</div>';
+    if(d.elapsed_ms)toast((d.tokens?d.tokens.toLocaleString()+' tok \u{00b7} ':'')+fmtMs(d.elapsed_ms));showTime(d.elapsed_ms);getu();
+  }catch(e){c.innerHTML='<h2>Error</h2><p>'+e.message+'</p>';}
+}
+function cdrill(e){if(!e||e.target.id==='ov')document.getElementById('ov').classList.remove('open');}
+
+function E(s){return s?String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):'';}
+function A(s){return E(s).replace(/'/g,'&#39;');}
+
+// Init
+getu();
+(async()=>{
+  try{
+    const d=await(await fetch('/api/models')).json();
+    modelsCache=d.models||[];
+    if(d.llama)updateLlamaUI(d.llama);
+  }catch(e){}
+})();
+</script>
+</body>
+</html>
