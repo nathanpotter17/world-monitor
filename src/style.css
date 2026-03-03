@@ -1,0 +1,492 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORLD MONITOR — style.css
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ──────────────────────────────────────────────────────── */
+
+:root {
+  /* Surfaces */
+  --bg:  #0a0f14;
+  --sf:  #111820;
+  --sf2: #1a222d;
+  --bd:  #2a3444;
+
+  /* Text */
+  --tx:  #d4dae4;
+  --tx2: #8892a2;
+
+  /* Accent */
+  --ac:  #4a9eff;
+  --ac2: #2a7de1;
+
+  /* Semantic colors */
+  --gn: #34d399;
+  --yl: #fbbf24;
+  --rd: #f87171;
+  --or: #fb923c;
+  --pr: #a78bfa;
+
+  /* Status tint backgrounds & borders (badges, fills, diagnostics) */
+  --st-gn-bg: #1a2e1a;  --st-gn-bd: #2a4a2a;
+  --st-yl-bg: #2e2a1a;  --st-yl-bd: #4a3a2a;
+  --st-rd-bg: #2e1a1a;  --st-rd-bd: #4a2a2a;
+
+  /* Layout */
+  --content-max: 960px;
+}
+
+
+/* ── Reset ──────────────────────────────────────────────────────────────── */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--tx);
+  font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  line-height: 1.5;
+}
+
+
+/* ── Shared Patterns ────────────────────────────────────────────────────── */
+
+/* Panel: dark surface with border (compose onto elements via HTML class) */
+.panel {
+  background: var(--sf);
+  border: 1px solid var(--bd);
+}
+
+/* Overlay backdrop (compose via HTML class on fixed overlays) */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  display: none;
+  z-index: 200;
+}
+.backdrop.open { display: flex; }
+
+/* Ghost button — no bg/border, used for close icons */
+.btn-ghost {
+  background: none;
+  border: none;
+  color: var(--tx2);
+  cursor: pointer;
+}
+.btn-ghost:hover { color: var(--tx); }
+
+/* Uppercase tracking label */
+.label-caps {
+  text-transform: uppercase;
+  letter-spacing: .05em;
+}
+
+
+/* ── Status Colors ──────────────────────────────────────────────────────── *
+ * Apply a .status-* class to set --s-fg, --s-bg, --s-bd for any child
+ * that uses the badge pattern (or any element reading those vars).
+ * ─────────────────────────────────────────────────────────────────────── */
+
+.status-ready   { --s-fg: var(--gn); --s-bg: var(--st-gn-bg); --s-bd: var(--st-gn-bd); }
+.status-warning { --s-fg: var(--yl); --s-bg: var(--st-yl-bg); --s-bd: var(--st-yl-bd); }
+.status-error   { --s-fg: var(--rd); --s-bg: var(--st-rd-bg); --s-bd: var(--st-rd-bd); }
+.status-off     { --s-fg: var(--tx2); --s-bg: var(--sf2);     --s-bd: var(--bd);       }
+
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+button {
+  background: var(--sf2);
+  color: var(--tx);
+  border: 1px solid var(--bd);
+  padding: 5px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: background .15s;
+}
+button:hover    { background: var(--bd); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+
+.pri       { background: var(--ac2); border-color: var(--ac); color: #fff; }
+.pri:hover { background: var(--ac); }
+
+.danger       { background: var(--st-rd-bg); border-color: var(--rd); color: var(--rd); }
+.danger:hover { background: #5a2a2a; }
+
+
+/* ── Keyframes ──────────────────────────────────────────────────────────── */
+
+@keyframes pulse {
+  0%, 100% { opacity: .4; }
+  50%      { opacity: 1; }
+}
+
+
+/* ── Top Bar ────────────────────────────────────────────────────────────── */
+
+.top {
+  padding: 8px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+.top h1 { font-size: 15px; font-weight: 600; letter-spacing: .06em; }
+.top em  { color: var(--ac); font-style: normal; }
+
+.tr { display: flex; align-items: center; gap: 10px; }
+
+
+/* ── Badge ──────────────────────────────────────────────────────────────── *
+ * Reads --s-fg / --s-bg / --s-bd from a .status-* class on itself.       */
+
+.badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 600;
+  background: var(--s-bg);
+  color: var(--s-fg);
+  border: 1px solid var(--s-bd);
+}
+
+
+/* ── Budget Meter ───────────────────────────────────────────────────────── */
+
+.bud { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--tx2); }
+.bar { width: 60px; height: 5px; background: var(--sf2); border-radius: 3px; overflow: hidden; }
+
+.fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--gn);
+  transition: width .3s, background .3s;
+}
+.fill.w { background: var(--yl); }
+.fill.d { background: var(--rd); }
+
+
+/* ── Command Bar ────────────────────────────────────────────────────────── */
+
+.cmd { padding: 8px 20px; }
+
+.cmd-row {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.cmd-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  color: var(--tx);
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  outline: none;
+}
+.cmd-input:focus { border-color: var(--ac); }
+.cmd-input::placeholder { color: var(--tx2); }
+
+.cmd-send { padding: 8px 16px; font-size: 13px; }
+
+
+/* ── Chips ──────────────────────────────────────────────────────────────── */
+
+.chips {
+  max-width: var(--content-max);
+  margin: 6px auto 0;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: var(--sf2);
+  border: 1px solid var(--bd);
+  color: var(--tx2);
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.chip:hover { background: var(--bd); color: var(--tx); }
+
+
+/* ── AI Panel ───────────────────────────────────────────────────────────── */
+
+.ai-panel {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 12px 20px;
+  display: none;
+}
+.ai-panel.open { display: block; }
+
+.ai-box {
+  border-radius: 8px;
+  padding: 14px 16px;
+  position: relative;
+}
+
+.ai-label {
+  font-size: 10px;
+  color: var(--pr);
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.ai-text  { font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+.ai-meta  { font-size: 10px; color: var(--tx2); margin-top: 8px; }
+.ai-close { font-size: 14px; padding: 0 4px; }
+
+
+/* ── Main Content ───────────────────────────────────────────────────────── */
+
+.main { max-width: var(--content-max); margin: 0 auto; padding: 20px; }
+
+.empty    { text-align: center; padding: 50px 20px; color: var(--tx2); }
+.empty h2 { font-size: 18px; color: var(--tx); margin-bottom: 6px; }
+.empty p  { margin-bottom: 12px; font-size: 13px; }
+
+.meta {
+  font-size: 11px;
+  color: var(--tx2);
+  padding: 8px 0 16px;
+  border-bottom: 1px solid var(--bd);
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+}
+
+
+/* ── Feed Categories & Items ────────────────────────────────────────────── */
+
+.cat { margin-bottom: 20px; }
+
+.ch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--bd);
+  margin-bottom: 4px;
+}
+.ci { font-size: 16px; }
+.ct { font-size: 12px; font-weight: 600; color: var(--tx2); }
+.cc { font-size: 10px; color: var(--tx2); margin-left: auto; }
+
+.it {
+  padding: 8px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  transition: background .12s;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.it:hover { background: var(--sf); }
+
+.dot { width: 5px; height: 5px; border-radius: 50%; margin-top: 7px; flex-shrink: 0; }
+.itx { flex: 1; min-width: 0; }
+.ih  { font-size: 13px; font-weight: 500; }
+
+.im {
+  font-size: 11px;
+  color: var(--tx2);
+  margin-top: 1px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.is  { background: var(--sf2); padding: 0 5px; border-radius: 2px; font-size: 10px; }
+.isu { font-size: 11px; color: var(--tx2); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+
+/* ── Drill Overlay ──────────────────────────────────────────────────────── */
+
+.ov {
+  background: rgba(0, 0, 0, .6);
+  align-items: center;
+  justify-content: center;
+}
+
+.dp {
+  border-radius: 10px;
+  width: min(640px, 92vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 20px;
+}
+.dp h2   { font-size: 16px; margin-bottom: 10px; padding-right: 30px; }
+.dp .det { font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+.dp .src { margin-top: 14px; font-size: 11px; color: var(--tx2); }
+.dp .rel { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+.dp .dm  { margin-top: 12px; font-size: 10px; color: var(--tx2); }
+
+.rt {
+  background: var(--sf2);
+  border: 1px solid var(--bd);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: background .12s;
+}
+.rt:hover { background: var(--bd); }
+
+.dc { float: right; font-size: 18px; }
+
+.dl       { display: inline-block; margin-top: 8px; font-size: 12px; color: var(--ac); text-decoration: none; }
+.dl:hover { text-decoration: underline; }
+
+
+/* ── Settings Panel ─────────────────────────────────────────────────────── */
+
+.sp-overlay {
+  background: rgba(0, 0, 0, .3);
+  z-index: 250;
+}
+
+.sp {
+  position: fixed;
+  top: 0;
+  right: -420px;
+  width: 400px;
+  height: 100vh;
+  background: var(--sf);
+  border-left: 1px solid var(--bd);
+  z-index: 300;
+  padding: 20px;
+  transition: right .25s;
+  overflow-y: auto;
+}
+.sp.open { right: 0; }
+
+.sp-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  font-size: 20px;
+  padding: 4px 8px;
+}
+
+.sp h3 { font-size: 14px; margin-bottom: 10px; margin-top: 4px; }
+
+.sep { border: none; border-top: 1px solid var(--bd); margin: 14px 0; }
+
+
+/* ── Settings Groups & Inputs ───────────────────────────────────────────── */
+
+.sg       { margin-bottom: 10px; }
+.sg label { display: block; font-size: 11px; color: var(--tx2); margin-bottom: 2px; }
+
+.sg input,
+.sg select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  color: var(--tx);
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.sg select { appearance: auto; }
+
+.hint { font-size: 10px; color: var(--tx2); margin-top: 2px; }
+
+
+/* ── Param Grids ────────────────────────────────────────────────────────── */
+
+.pg, .pg3 {
+  display: grid;
+  gap: 8px;
+}
+.pg      { grid-template-columns: 1fr 1fr; }
+.pg3     { grid-template-columns: 1fr 1fr 1fr; }
+.pg  .sg,
+.pg3 .sg { margin-bottom: 0; }
+
+
+/* ── Llama Status ───────────────────────────────────────────────────────── */
+
+.llama-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+
+.ls-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ls-dot.ready    { background: var(--gn); }
+.ls-dot.starting { background: var(--yl); animation: pulse 1s ease-in-out infinite; }
+.ls-dot.stopped  { background: var(--tx2); }
+.ls-dot.error    { background: var(--rd); }
+
+.ls-text   { font-size: 12px; flex: 1; }
+.ls-detail { font-size: 10px; color: var(--tx2); }
+
+
+/* ── Diagnostics ────────────────────────────────────────────────────────── */
+
+.diag-row {
+  font-size: 11px;
+  padding: 3px 0;
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--bd);
+}
+.diag-name { width: 120px; flex-shrink: 0; font-weight: 500; color: var(--tx); }
+.diag-ok   { color: var(--gn); }
+.diag-fail { color: var(--rd); }
+
+
+/* ── Loading Indicator ──────────────────────────────────────────────────── */
+
+.ld { text-align: center; padding: 20px; color: var(--tx2); font-size: 13px; }
+
+.ld span {
+  animation: pulse 1.2s ease-in-out infinite;
+  font-size: 18px;
+}
+.ld span:nth-child(2) { animation-delay: .2s; }
+.ld span:nth-child(3) { animation-delay: .4s; }
+
+
+/* ── Toast ──────────────────────────────────────────────────────────────── */
+
+.toast {
+  position: fixed;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--sf2);
+  border: 1px solid var(--bd);
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--tx2);
+  opacity: 0;
+  transition: opacity .2s;
+  z-index: 400;
+}
+.toast.v { opacity: 1; }

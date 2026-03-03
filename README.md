@@ -35,16 +35,11 @@ Known models with tuned defaults (GPU layers, context size, temperature):
 | Model | Family | Default NGL | Default Ctx |
 |-------|--------|-------------|-------------|
 | OpenAI GPT-OSS 20B (NEO-CODE2) | gpt-oss | 20 | 4096 |
-| DeepSeek Coder 6.7B | deepseek | 99 | 4096 |
 | DeepResearch 30B A3B | deepseek | 15 | 2048 |
 | Qwen3 30B A3B | qwen | 15 | 2048 |
 | Qwen2.5 Coder 14B / 7B | qwen | 15-20 | 4096 |
 | Llama 3.1 8B Instruct | llama | 20 | 4096 |
 | Gemma 3 4B / Gemma 2 9B | gemma | 20-25 | 4096 |
-| CodeGeeX4 All 9B | codegeex | 20 | 4096 |
-| GLM-4.6 (160x19B MoE) | glm | 12 | 8192 |
-| GLM-4.7 (Thinking) | glm | 8 | 8192 |
-| GLM-4.7-Flash | glm | 20 | 8192 |
 
 Any unrecognized `.gguf` file will also be discovered with sane defaults (ngl=15, ctx=4096).
 
