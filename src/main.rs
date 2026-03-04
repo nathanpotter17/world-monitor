@@ -2027,6 +2027,16 @@ fn do_rt_check(st: &Shared, body: &str) -> String {
     let cfg = st.lock().unwrap().cfg.clone();
     let t0 = Instant::now();
 
+    // Detect if this is likely a camera/image URL
+    let is_image_url = {
+        let lu = url.to_lowercase();
+        lu.ends_with(".jpg") || lu.ends_with(".jpeg") || lu.ends_with(".png")
+            || lu.ends_with(".gif") || lu.contains("/cctv/") || lu.contains("/image")
+            || lu.contains("/snapshot") || lu.contains("/mjpg/") || lu.contains("axis-cgi")
+            || lu.contains("cctvimage") || lu.contains("maphandler") || lu.contains("viewimage")
+            || lu.contains("flowimages") || lu.contains("roadcams") || lu.contains("travelercam")
+    };
+
     match method.as_str() {
         "http" => {
             let actual_url = if url.starts_with("http://") || url.starts_with("https://") {
@@ -2035,25 +2045,24 @@ fn do_rt_check(st: &Shared, body: &str) -> String {
                 format!("http://{}", url)
             };
 
-            // Use curl with verbose write-out to get rich metadata
-            let out = Command::new(curl_cmd())
-                .args([
-                    "-s", "-L",
-                    "--max-time", &cfg.timeout.to_string(),
-                    "-o", "/dev/null",
-                    "-w", "%{http_code}\\n%{content_type}\\n%{time_total}\\n%{num_redirects}\\n%{url_effective}\\n%{ssl_verify_result}\\n%{size_download}",
-                    "-D", "-",  // dump headers to stdout... actually we need a different approach
-                    &actual_url,
-                ])
-                .output();
+            // Derive Referer from URL origin
+            let referer = {
+                if let Some(idx) = actual_url.find("://") {
+                    let after = &actual_url[idx + 3..];
+                    let host_end = after.find('/').unwrap_or(after.len());
+                    format!("{}/", &actual_url[..idx + 3 + host_end])
+                } else { String::new() }
+            };
 
-            // Simpler approach: two calls, one for status+metadata, one for headers
             let out = Command::new(curl_cmd())
                 .args([
                     "-s", "-L",
                     "--max-time", &cfg.timeout.to_string(),
                     "-o", "/dev/null",
                     "-w", "%{http_code}\t%{content_type}\t%{num_redirects}\t%{url_effective}\t%{size_download}",
+                    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "-H", &format!("Referer: {}", referer),
+                    "-H", "Accept: image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
                     &actual_url,
                 ])
                 .output();
@@ -2068,86 +2077,112 @@ fn do_rt_check(st: &Shared, body: &str) -> String {
                     let content_type = parts.get(1).unwrap_or(&"").to_string();
                     let redirects: u32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
                     let effective_url = parts.get(3).unwrap_or(&"").to_string();
-                    let size = parts.get(4).unwrap_or(&"0").to_string();
-                    let up = code_num >= 200 && code_num < 500;
+                    let size_str = parts.get(4).unwrap_or(&"0").trim().to_string();
+                    let size_bytes: u64 = size_str.parse().unwrap_or(0);
 
-                    // Try to get Server header with a HEAD request
-                    let server = Command::new(curl_cmd())
-                        .args([
-                            "-s", "-I", "-L",
-                            "--max-time", "5",
-                            &actual_url,
-                        ])
-                        .output()
-                        .ok()
-                        .map(|ho| {
-                            let hdrs = String::from_utf8_lossy(&ho.stdout).to_string();
-                            let server = hdrs.lines()
-                                .find(|l| l.to_lowercase().starts_with("server:"))
-                                .map(|l| l.splitn(2, ':').nth(1).unwrap_or("").trim().to_string())
-                                .unwrap_or_default();
-                            server
-                        })
-                        .unwrap_or_default();
+                    let http_ok = code_num >= 200 && code_num < 300;
+                    let ct_lower = content_type.to_lowercase();
+                    let is_image_ct = ct_lower.contains("image/") || ct_lower.contains("multipart/x-mixed-replace");
+
+                    // Image validation: real images are >4KB with image Content-Type
+                    let image_valid = is_image_url && http_ok && is_image_ct && size_bytes > 4096;
+                    let up = if is_image_url { http_ok } else { code_num >= 200 && code_num < 500 };
+                    let detail = if is_image_url && http_ok && image_valid {
+                        format!("HTTP {} — valid image ({}B)", code_num, size_bytes)
+                    } else if is_image_url && http_ok && !is_image_ct {
+                        format!("HTTP {} — not image ({})", code_num, content_type)
+                    } else if is_image_url && http_ok && size_bytes <= 4096 {
+                        format!("HTTP {} — too small ({}B placeholder?)", code_num, size_bytes)
+                    } else {
+                        format!("HTTP {}", code_num)
+                    };
+
+                    let server = if http_ok {
+                        Command::new(curl_cmd())
+                            .args(["-s", "-I", "-L", "--max-time", "4",
+                                "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                                "-H", &format!("Referer: {}", referer),
+                                &actual_url])
+                            .output().ok()
+                            .map(|ho| {
+                                String::from_utf8_lossy(&ho.stdout).lines()
+                                    .find(|l| l.to_lowercase().starts_with("server:"))
+                                    .map(|l| l.splitn(2, ':').nth(1).unwrap_or("").trim().to_string())
+                                    .unwrap_or_default()
+                            }).unwrap_or_default()
+                    } else { String::new() };
 
                     format!(
-                        r#"{{"up":{},"latency_ms":{},"http_code":{},"content_type":"{}","detail":"HTTP {}","server":"{}","redirects":{},"final_url":"{}","size":"{}B"}}"#,
-                        up, latency, code_num,
-                        jval(&content_type),
-                        code_num,
-                        jval(&server),
-                        redirects,
-                        jval(&effective_url),
-                        size
+                        r#"{{"up":{},"latency_ms":{},"http_code":{},"content_type":"{}","detail":"{}","server":"{}","redirects":{},"final_url":"{}","size":"{}B","image_valid":{}}}"#,
+                        up, latency, code_num, jval(&content_type), jval(&detail), jval(&server),
+                        redirects, jval(&effective_url), size_bytes, image_valid
                     )
                 }
-                Err(e) => {
-                    format!(
-                        r#"{{"up":false,"latency_ms":{},"detail":"{}"}}"#,
-                        latency,
-                        jval(&format!("curl: {e}"))
-                    )
-                }
+                Err(e) => format!(r#"{{"up":false,"latency_ms":{},"detail":"{}","image_valid":false}}"#, latency, jval(&format!("curl: {e}")))
             }
         }
         "ping" => {
             let host = url.split(':').next().unwrap_or(&url);
-            let ping_cmd = if cfg!(windows) { "ping" } else { "ping" };
-            let count_flag = if cfg!(windows) { "-n" } else { "-c" };
 
-            let out = Command::new(ping_cmd)
-                .args([count_flag, "1", "-W", "5", host])
+            // Try ICMP ping first
+            let count_flag = if cfg!(windows) { "-n" } else { "-c" };
+            let timeout_flag = if cfg!(windows) { "-w" } else { "-W" };
+            // Use -W with seconds on Linux
+            let out = Command::new("ping")
+                .args([count_flag, "1", timeout_flag, "3", host])
                 .output();
 
             let latency = t0.elapsed().as_millis() as u64;
 
             match out {
-                Ok(o) => {
-                    let up = o.status.success();
+                Ok(o) if o.status.success() => {
                     let stdout = String::from_utf8_lossy(&o.stdout);
-                    // Try to extract ping time
-                    let detail = if up {
-                        // Look for "time=X.X ms" pattern
-                        stdout
-                            .split("time=")
-                            .nth(1)
-                            .and_then(|s| s.split_whitespace().next())
-                            .unwrap_or("ok")
-                            .to_string()
-                    } else {
-                        "unreachable".into()
-                    };
+                    let detail = stdout
+                        .split("time=")
+                        .nth(1)
+                        .and_then(|s| s.split_whitespace().next())
+                        .unwrap_or("ok")
+                        .to_string();
                     format!(
-                        r#"{{"up":{},"latency_ms":{},"detail":"{}"}}"#,
-                        up, latency, jval(&detail)
+                        r#"{{"up":true,"latency_ms":{},"detail":"ping {}"}}"#,
+                        latency, jval(&detail)
                     )
                 }
-                Err(e) => {
-                    format!(
-                        r#"{{"up":false,"latency_ms":{},"detail":"{}"}}"#,
-                        latency,
-                        jval(&format!("ping: {e}"))
-                    )
+                _ => {
+                    // ICMP failed (common in containers) — fall back to TCP connect via curl
+                    let t1 = std::time::Instant::now();
+                    let tcp_url = if host.contains('.') && !host.starts_with("http") {
+                        format!("https://{}", host)
+                    } else {
+                        host.to_string()
+                    };
+                    let tcp_out = Command::new(curl_cmd())
+                        .args([
+                            "-s", "-o", "/dev/null",
+                            "--max-time", "4",
+                            "-w", "%{http_code}",
+                            &tcp_url,
+                        ])
+                        .output();
+                    let tcp_latency = t1.elapsed().as_millis() as u64;
+
+                    match tcp_out {
+                        Ok(to) if to.status.success() => {
+                            let code = String::from_utf8_lossy(&to.stdout).trim().to_string();
+                            let code_num: u32 = code.parse().unwrap_or(0);
+                            let up = code_num > 0 && code_num < 500;
+                            format!(
+                                r#"{{"up":{},"latency_ms":{},"detail":"TCP connect HTTP {} (ICMP unavailable)"}}"#,
+                                up, tcp_latency, code
+                            )
+                        }
+                        _ => {
+                            format!(
+                                r#"{{"up":false,"latency_ms":{},"detail":"ICMP and TCP both failed"}}"#,
+                                latency
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -2261,45 +2296,93 @@ fn do_rt_flight(st: &Shared, body: &str) -> String {
                                     if let Some(arr_end) = states_area[arr_start..].find(']') {
                                         let state_str = &states_area[arr_start..arr_start + arr_end + 1];
                                         // Parse the array manually — extract comma-separated values
+                                        // OpenSky state vector indices:
+                                        // 0:icao24, 1:callsign, 2:origin_country, 3:time_position, 4:last_contact,
+                                        // 5:longitude, 6:latitude, 7:baro_altitude, 8:on_ground, 9:velocity,
+                                        // 10:true_track, 11:vertical_rate, 12:sensors, 13:geo_altitude,
+                                        // 14:squawk, 15:spi, 16:position_source, 17:category
                                         let inner = &state_str[1..state_str.len() - 1];
                                         let fields = split_json_array(inner);
 
                                         let icao = clean_json_str(fields.get(0).unwrap_or(&""));
                                         let cs = clean_json_str(fields.get(1).unwrap_or(&"")).trim().to_string();
                                         let origin = clean_json_str(fields.get(2).unwrap_or(&""));
+                                        let time_position: i64 = fields.get(3).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                                        let last_contact: i64 = fields.get(4).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
                                         let lng: f64 = fields.get(5).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
                                         let lat: f64 = fields.get(6).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-                                        let alt: f64 = fields.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
+                                        let baro_alt: f64 = fields.get(7).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
                                         let on_ground = fields.get(8).map(|s| s.trim() == "true").unwrap_or(false);
                                         let velocity: f64 = fields.get(9).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
                                         let heading: f64 = fields.get(10).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
                                         let vert_rate: f64 = fields.get(11).and_then(|s| s.trim().parse().ok()).unwrap_or(0.0);
-                                        let geo_alt: f64 = fields.get(13).and_then(|s| s.trim().parse().ok()).unwrap_or(alt);
+                                        let geo_alt: f64 = fields.get(13).and_then(|s| s.trim().parse().ok()).unwrap_or(baro_alt);
+                                        let squawk = clean_json_str(fields.get(14).unwrap_or(&""));
+                                        let spi = fields.get(15).map(|s| s.trim() == "true").unwrap_or(false);
+                                        let pos_source: u32 = fields.get(16).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                                        let category: u32 = fields.get(17).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
 
-                                        let display_alt = if geo_alt > 0.0 { geo_alt } else { alt };
+                                        let display_alt = if geo_alt > 0.0 { geo_alt } else { baro_alt };
                                         let position = if lat != 0.0 || lng != 0.0 {
                                             format!("{:.4}, {:.4}", lat, lng)
                                         } else {
                                             "unknown".into()
                                         };
 
+                                        // Map position_source to string
+                                        let pos_source_str = match pos_source {
+                                            0 => "ADS-B",
+                                            1 => "ASTERIX",
+                                            2 => "MLAT",
+                                            3 => "FLARM",
+                                            _ => "Unknown",
+                                        };
+
+                                        // Map category to string
+                                        let cat_str = match category {
+                                            0 => "",
+                                            1 => "No category info",
+                                            2 => "Light (<15500 lbs)",
+                                            3 => "Small (15500-75000 lbs)",
+                                            4 => "Large (75000-300000 lbs)",
+                                            5 => "High Vortex Large (B-757)",
+                                            6 => "Heavy (>300000 lbs)",
+                                            7 => "High Performance (>5g, >400kts)",
+                                            8 => "Rotorcraft",
+                                            9 => "Glider/Sailplane",
+                                            10 => "Lighter-than-air",
+                                            11 => "Parachutist/Skydiver",
+                                            12 => "Ultralight/Paraglider",
+                                            14 => "UAV",
+                                            15 => "Space/Trans-atmospheric",
+                                            16 => "Emergency Vehicle",
+                                            17 => "Service Vehicle",
+                                            _ => "",
+                                        };
+
                                         eprintln!(
-                                            "[rt-flight] Found {} ({}): {},{} alt={:.0}m spd={:.0}m/s hdg={:.0}",
-                                            cs, origin, lat, lng, display_alt, velocity, heading
+                                            "[rt-flight] Found {} ({}): {},{} alt={:.0}m spd={:.0}m/s hdg={:.0} sqk={} cat={} src={}",
+                                            cs, origin, lat, lng, display_alt, velocity, heading, squawk, cat_str, pos_source_str
                                         );
 
+                                        // Derive airline from ICAO callsign prefix (first 3 letters)
+                                        let airline = icao_airline_name(&cs);
+
+                                        // Look up route via cache file, then OpenSky routes API if not cached
+                                        let (departure, destination) = lookup_flight_route(&cs);
+
                                         return format!(
-                                            r#"{{"status":"tracked","info":"Live via OpenSky — {} ({})","source":"opensky","position":"{}","altitude":{:.0},"velocity":{:.1},"heading":{:.0},"vertical_rate":{:.1},"on_ground":{},"origin_country":"{}","icao":"{}"}}"#,
-                                            jval(&cs),
-                                            jval(&origin),
-                                            jval(&position),
-                                            display_alt,
-                                            velocity,
-                                            heading,
-                                            vert_rate,
-                                            on_ground,
-                                            jval(&origin),
-                                            jval(&icao)
+                                            r#"{{"status":"tracked","info":"Live via OpenSky — {} ({})","source":"opensky","position":"{}","latitude":{},"longitude":{},"altitude":{:.0},"baro_altitude":{:.0},"geo_altitude":{:.0},"velocity":{:.1},"heading":{:.0},"vertical_rate":{:.1},"on_ground":{},"origin_country":"{}","icao":"{}","squawk":"{}","spi":{},"position_source":"{}","category":"{}","category_id":{},"time_position":{},"last_contact":{},"departure":"{}","destination":"{}","airline":"{}"}}"#,
+                                            jval(&cs), jval(&origin), jval(&position),
+                                            lat, lng,
+                                            display_alt, baro_alt, geo_alt,
+                                            velocity, heading, vert_rate, on_ground,
+                                            jval(&origin), jval(&icao),
+                                            jval(&squawk), spi,
+                                            jval(pos_source_str), jval(cat_str), category,
+                                            time_position, last_contact,
+                                            jval(&departure), jval(&destination),
+                                            jval(&airline)
                                         );
                                     }
                                 }
@@ -2395,6 +2478,177 @@ fn do_rt_flight(st: &Shared, body: &str) -> String {
 }
 
 /// Split a JSON array's inner content by top-level commas (respecting strings and nested arrays).
+/// Look up flight route with file-based caching and rate limiting.
+/// Cache file: /tmp/rt_route_cache.txt — one line per callsign: "CS\tDEP\tDEST\tTIME"
+fn lookup_flight_route(callsign: &str) -> (String, String) {
+    let cs = callsign.trim().to_uppercase();
+    let cache_path = "/tmp/rt_route_cache.txt";
+
+    // Check cache first
+    if let Ok(contents) = std::fs::read_to_string(cache_path) {
+        for line in contents.lines() {
+            let parts: Vec<&str> = line.split('\t').collect();
+            if parts.len() >= 3 && parts[0] == cs {
+                let dep = parts[1].to_string();
+                let dest = parts[2].to_string();
+                if !dep.is_empty() || !dest.is_empty() {
+                    eprintln!("[rt-flight] Route cache hit for {}: {} → {}", cs, dep, dest);
+                    return (dep, dest);
+                }
+                // Cached as "no route found" — check if it's recent (within 1 hour)
+                if parts.len() >= 4 {
+                    if let Ok(ts) = parts[3].parse::<u64>() {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                        if now - ts < 3600 {
+                            return (String::new(), String::new()); // cached negative result
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Rate limit: check last API call time
+    let rate_path = "/tmp/rt_route_last_call";
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+    if let Ok(last) = std::fs::read_to_string(rate_path) {
+        if let Ok(last_ts) = last.trim().parse::<u64>() {
+            if now - last_ts < 6 {
+                eprintln!("[rt-flight] Route lookup rate-limited for {} (last call {}s ago)", cs, now - last_ts);
+                return (String::new(), String::new());
+            }
+        }
+    }
+    let _ = std::fs::write(rate_path, now.to_string());
+
+    // Query OpenSky routes API
+    let routes_url = format!("https://opensky-network.org/api/routes?callsign={}", cs);
+    eprintln!("[rt-flight] Querying routes API for {}", cs);
+
+    let (dep, dest) = match Command::new(curl_cmd())
+        .args(["-s", "--max-time", "6",
+            "-w", "\n%{http_code}",
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "-H", "Accept: application/json",
+            &routes_url])
+        .output()
+    {
+        Ok(o) => {
+            let raw = String::from_utf8_lossy(&o.stdout).to_string();
+            // Last line is the HTTP code from -w
+            let lines: Vec<&str> = raw.rsplitn(2, '\n').collect();
+            let http_code = lines.first().unwrap_or(&"0").trim();
+            let body = lines.get(1).unwrap_or(&"").trim();
+
+            eprintln!("[rt-flight] Routes API for {}: HTTP {} — {:.*}", cs, http_code, 300, body);
+
+            if http_code == "429" {
+                eprintln!("[rt-flight] Routes API rate-limited (429) for {}", cs);
+                return (String::new(), String::new()); // Don't cache 429s
+            }
+
+            if http_code != "200" || body.is_empty() {
+                (String::new(), String::new())
+            } else if let Some(arr_start) = body.find("\"route\"") {
+                let after = &body[arr_start..];
+                if let Some(open) = after.find('[') {
+                    if let Some(close) = after[open..].find(']') {
+                        let items: Vec<String> = after[open+1..open+close]
+                            .split(',')
+                            .map(|s| s.trim().trim_matches('"').to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        let d = items.first().cloned().unwrap_or_default();
+                        let a = if items.len() > 1 { items.last().cloned().unwrap_or_default() } else { String::new() };
+                        eprintln!("[rt-flight] Route found for {}: {} → {}", cs, d, a);
+                        (d, a)
+                    } else { (String::new(), String::new()) }
+                } else { (String::new(), String::new()) }
+            } else { (String::new(), String::new()) }
+        }
+        Err(e) => {
+            eprintln!("[rt-flight] Routes API error for {}: {}", cs, e);
+            (String::new(), String::new())
+        }
+    };
+
+    // Cache the result (append to file)
+    let cache_line = format!("{}\t{}\t{}\t{}\n", cs, dep, dest, now);
+    let _ = std::fs::OpenOptions::new().create(true).append(true)
+        .open(cache_path).and_then(|mut f| {
+            use std::io::Write;
+            f.write_all(cache_line.as_bytes())
+        });
+
+    (dep, dest)
+}
+
+/// Look up airline name from ICAO callsign prefix (first 3 characters)
+fn icao_airline_name(callsign: &str) -> String {
+    let cs = callsign.trim().to_uppercase();
+    if cs.len() < 3 { return String::new(); }
+    let prefix = &cs[..3];
+
+    match prefix {
+        "UAL" => "United Airlines".into(),
+        "DAL" => "Delta Air Lines".into(),
+        "AAL" => "American Airlines".into(),
+        "SWA" => "Southwest Airlines".into(),
+        "JBU" => "JetBlue Airways".into(),
+        "NKS" => "Spirit Airlines".into(),
+        "FFT" => "Frontier Airlines".into(),
+        "ASA" => "Alaska Airlines".into(),
+        "HAL" => "Hawaiian Airlines".into(),
+        "SKW" => "SkyWest Airlines".into(),
+        "RPA" => "Republic Airways".into(),
+        "ENY" => "Envoy Air".into(),
+        "PDT" => "Piedmont Airlines".into(),
+        "EJA" => "NetJets".into(),
+        "AXB" => "Air India Express".into(),
+        "AIQ" => "AirAsia India".into(),
+        "BAW" => "British Airways".into(),
+        "DLH" => "Lufthansa".into(),
+        "AFR" => "Air France".into(),
+        "KLM" => "KLM Royal Dutch".into(),
+        "EZY" => "easyJet".into(),
+        "RYR" => "Ryanair".into(),
+        "UAE" => "Emirates".into(),
+        "QTR" => "Qatar Airways".into(),
+        "ETH" => "Ethiopian Airlines".into(),
+        "SIA" => "Singapore Airlines".into(),
+        "CPA" => "Cathay Pacific".into(),
+        "ANA" => "All Nippon Airways".into(),
+        "JAL" => "Japan Airlines".into(),
+        "KAL" => "Korean Air".into(),
+        "CCA" => "Air China".into(),
+        "CES" => "China Eastern".into(),
+        "CSN" => "China Southern".into(),
+        "THY" => "Turkish Airlines".into(),
+        "QFA" => "Qantas".into(),
+        "ANZ" => "Air New Zealand".into(),
+        "ACA" => "Air Canada".into(),
+        "WJA" => "WestJet".into(),
+        "TAM" => "LATAM Brasil".into(),
+        "LAN" => "LATAM Chile".into(),
+        "AVA" => "Avianca".into(),
+        "VOI" => "Volaris".into(),
+        "AMX" => "Aeromexico".into(),
+        "JST" => "Jetstar Airways".into(),
+        "VOZ" => "Virgin Australia".into(),
+        "ZKM" | "ZKJ" | "ZKN" => "Air New Zealand Link".into(),
+        "EIN" => "Aer Lingus".into(),
+        "FIN" => "Finnair".into(),
+        "SAS" => "SAS Scandinavian".into(),
+        "IBE" => "Iberia".into(),
+        "TAP" => "TAP Air Portugal".into(),
+        "SWR" => "Swiss Intl Air".into(),
+        "AUA" => "Austrian Airlines".into(),
+        _ => String::new(),
+    }
+}
+
 fn split_json_array(s: &str) -> Vec<&str> {
     let mut result = Vec::new();
     let mut depth = 0;
@@ -2583,6 +2837,19 @@ fn do_rt_discover(st: &Shared, body: &str) -> String {
             }));
         }
 
+        // Source 6: NYC DOT Traffic Management Center (919 cameras, no auth, direct JPEG)
+        {
+            let cam = Arc::clone(&cameras);
+            let lg = Arc::clone(&log);
+            let to = timeout.clone();
+            handles.push(std::thread::spawn(move || {
+                lg.lock().unwrap().push("Crawling NYC TMC camera API...".into());
+                let found = discover_nyctmc(&to);
+                lg.lock().unwrap().push(format!("NYC TMC: {} cameras", found.len()));
+                cam.lock().unwrap().extend(found);
+            }));
+        }
+
         for h in handles { let _ = h.join(); }
 
         let count = cameras.lock().unwrap().len();
@@ -2624,123 +2891,10 @@ fn do_rt_discover(st: &Shared, body: &str) -> String {
 // We verify each one with a fast HEAD check before returning it.
 
 fn discover_dot_catalog(_timeout: &str) -> Vec<String> {
-    let catalog: Vec<(&str, &str, &str)> = vec![
-        // (name, url, category)
-        // ── WSDOT (Washington) — images.wsdot.wa.gov direct JPEGs ──
-        ("WSDOT I-5 Seattle - Ship Canal Bridge", "https://images.wsdot.wa.gov/nw/005vc16645.jpg", "traffic"),
-        ("WSDOT I-5 Seattle - Convention Pl", "https://images.wsdot.wa.gov/nw/005vc16591.jpg", "traffic"),
-        ("WSDOT I-5 Seattle - James St", "https://images.wsdot.wa.gov/nw/005vc16508.jpg", "traffic"),
-        ("WSDOT I-5 Tacoma - SR16 Interchange", "https://images.wsdot.wa.gov/nw/005vc13320.jpg", "traffic"),
-        ("WSDOT I-90 Seattle - Rainier Ave", "https://images.wsdot.wa.gov/nw/090vc03414.jpg", "traffic"),
-        ("WSDOT I-90 Snoqualmie Pass - Summit", "https://images.wsdot.wa.gov/sc/090vc05256.jpg", "traffic"),
-        ("WSDOT SR520 Seattle - Montlake", "https://images.wsdot.wa.gov/nw/520vc00280.jpg", "traffic"),
-        ("WSDOT I-405 Bellevue - NE 8th", "https://images.wsdot.wa.gov/nw/405vc01199.jpg", "traffic"),
-        ("WSDOT SR99 Seattle - Aurora Bridge", "https://images.wsdot.wa.gov/nw/099vc03562.jpg", "traffic"),
-        ("WSDOT I-5 Everett - Broadway", "https://images.wsdot.wa.gov/nw/005vc19270.jpg", "traffic"),
-        ("WSDOT I-5 Olympia - Capitol Blvd", "https://images.wsdot.wa.gov/sw/005vc10507.jpg", "traffic"),
-        ("WSDOT I-82 Yakima - Valley Mall", "https://images.wsdot.wa.gov/sc/082vc03168.jpg", "traffic"),
-        ("WSDOT US97 Blewett Pass", "https://images.wsdot.wa.gov/sc/097vc15948.jpg", "traffic"),
-        ("WSDOT SR14 White Salmon", "https://images.wsdot.wa.gov/sw/014vc05970.jpg", "traffic"),
-        ("WSDOT I-5 Vancouver - Mill Plain", "https://images.wsdot.wa.gov/sw/005vc00194.jpg", "traffic"),
-
-        // ── Oregon DOT — tripcheck.com direct JPEGs ──
-        ("ODOT I-5 Portland - Marquam Bridge", "https://tripcheck.com/RoadCams/cams/I-5_at_Marquam_Bridge_pid1879.jpg", "traffic"),
-        ("ODOT I-5 Portland - Going St", "https://tripcheck.com/RoadCams/cams/I-5_at_Going_St_pid1849.jpg", "traffic"),
-        ("ODOT I-5 Portland - Terwilliger", "https://tripcheck.com/RoadCams/cams/I-5_at_Terwilliger_pid1884.jpg", "traffic"),
-        ("ODOT I-84 Portland - 33rd Ave", "https://tripcheck.com/RoadCams/cams/I-84_at_33rd_pid2082.jpg", "traffic"),
-        ("ODOT I-5 Salem - Market St", "https://tripcheck.com/RoadCams/cams/I-5_at_Market_pid2325.jpg", "traffic"),
-        ("ODOT I-5 Eugene - Beltline", "https://tripcheck.com/RoadCams/cams/I-5_at_Beltline_pid2396.jpg", "traffic"),
-        ("ODOT US26 Mt Hood - Government Camp", "https://tripcheck.com/RoadCams/cams/US26_at_Government_Camp_pid2601.jpg", "traffic"),
-        ("ODOT US97 Bend", "https://tripcheck.com/RoadCams/cams/US97_at_Bend_Pkwy_pid2495.jpg", "traffic"),
-        ("ODOT I-205 Portland - Abernethy Bridge", "https://tripcheck.com/RoadCams/cams/I-205_at_Abernethy_pid1930.jpg", "traffic"),
-
-        // ── MnDOT (Minnesota) — direct JPEGs ──
-        ("MnDOT I-94 Minneapolis - Hennepin Ave", "https://video.dot.state.mn.us/video/image/metro/C023.jpg", "traffic"),
-        ("MnDOT I-35W Minneapolis - Downtown", "https://video.dot.state.mn.us/video/image/metro/C089.jpg", "traffic"),
-        ("MnDOT I-394 Minneapolis - Penn Ave", "https://video.dot.state.mn.us/video/image/metro/C022.jpg", "traffic"),
-        ("MnDOT I-494 Bloomington - France Ave", "https://video.dot.state.mn.us/video/image/metro/C026.jpg", "traffic"),
-        ("MnDOT I-35E St Paul - Downtown", "https://video.dot.state.mn.us/video/image/metro/C165.jpg", "traffic"),
-        ("MnDOT I-94 St Paul - Dale", "https://video.dot.state.mn.us/video/image/metro/C039.jpg", "traffic"),
-        ("MnDOT I-694 Arden Hills", "https://video.dot.state.mn.us/video/image/metro/C029.jpg", "traffic"),
-        ("MnDOT I-35W Burnsville", "https://video.dot.state.mn.us/video/image/metro/C118.jpg", "traffic"),
-        ("MnDOT I-94 Rogers", "https://video.dot.state.mn.us/video/image/metro/C052.jpg", "traffic"),
-        ("MnDOT I-35E Lino Lakes", "https://video.dot.state.mn.us/video/image/metro/C028.jpg", "traffic"),
-        ("MnDOT US169 Mankato", "https://video.dot.state.mn.us/video/image/Blue_Earth_2/C27.jpg", "traffic"),
-        ("MnDOT I-90 Worthington", "https://video.dot.state.mn.us/video/image/Worthington_1/C82.jpg", "traffic"),
-        ("MnDOT I-94 Fergus Falls", "https://video.dot.state.mn.us/video/image/Fergus_Falls_2/C94.jpg", "traffic"),
-        ("MnDOT US2 Bemidji", "https://video.dot.state.mn.us/video/image/Bemidji_2/C72.jpg", "traffic"),
-        ("MnDOT I-35 Duluth", "https://video.dot.state.mn.us/video/image/Duluth/C37.jpg", "traffic"),
-
-        // ── WisDOT (Wisconsin) ──
-        ("WisDOT I-94 Milwaukee - Zoo Interchange", "https://images.511wi.gov/wiscondot/cameras/milwaukee/I-94_I-894%20Zoo%20Interchange.jpg", "traffic"),
-        ("WisDOT I-43 Milwaukee - Marquette", "https://images.511wi.gov/wiscondot/cameras/milwaukee/I-43_Marquette.jpg", "traffic"),
-        ("WisDOT I-94 Madison - Beltline", "https://images.511wi.gov/wiscondot/cameras/madison/I-94_Beltline.jpg", "traffic"),
-
-        // ── Iowa ──
-        ("Iowa IIHR WC03 Axis", "https://iihrwc03.iowa.uiowa.edu/axis-cgi/jpg/image.cgi", "public"),
-        ("Iowa IIHR WC03 MJPEG", "https://iihrwc03.iowa.uiowa.edu/axis-cgi/mjpg/video.cgi", "public"),
-
-        // ── Illinois DOT — Chicago cameras ──
-        ("IDOT I-90/94 Chicago - Congress", "https://traveler.ilhighways.com/travelercam/r0001_06.jpg", "traffic"),
-        ("IDOT I-55 Chicago - Stevenson", "https://traveler.ilhighways.com/travelercam/r0001_14.jpg", "traffic"),
-        ("IDOT I-290 Chicago - Eisenhower", "https://traveler.ilhighways.com/travelercam/r0001_02.jpg", "traffic"),
-        ("IDOT I-90/94 Chicago - Ohio St", "https://traveler.ilhighways.com/travelercam/r0001_08.jpg", "traffic"),
-        ("IDOT I-57 Chicago", "https://traveler.ilhighways.com/travelercam/r0001_16.jpg", "traffic"),
-
-        // ── PennDOT ──
-        ("PennDOT I-76 Philadelphia - 30th St", "https://www.511pa.com/flowimages/cctv3260.jpg", "traffic"),
-        ("PennDOT I-76 PA Turnpike - Valley Forge", "https://www.511pa.com/flowimages/cctv5330.jpg", "traffic"),
-        ("PennDOT I-376 Pittsburgh - Fort Pitt", "https://www.511pa.com/flowimages/cctv9204.jpg", "traffic"),
-
-        // ── North Carolina DOT ──
-        ("NCDOT I-40 Raleigh - Wade Ave", "https://tims.ncdot.gov/TIMS/cameras/viewimage.ashx?id=I-40_X291.2", "traffic"),
-        ("NCDOT I-77 Charlotte - Brookshire", "https://tims.ncdot.gov/TIMS/cameras/viewimage.ashx?id=I-77_X012.5", "traffic"),
-        ("NCDOT I-85 Durham", "https://tims.ncdot.gov/TIMS/cameras/viewimage.ashx?id=I-85_X173.0", "traffic"),
-
-        // ── Texas DOT ──
-        ("TxDOT I-45 Houston - Downtown", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/Houston/IH0045_0451600.gif", "traffic"),
-        ("TxDOT I-10 Houston - Katy Fwy", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/Houston/IH0010_0541560.gif", "traffic"),
-        ("TxDOT US59 Houston - Southwest Fwy", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/Houston/US0059_0470430.gif", "traffic"),
-        ("TxDOT I-35 San Antonio", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/SanAntonio/IH0035_0155360.gif", "traffic"),
-        ("TxDOT I-35E Dallas - Downtown", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/Dallas/IH0035E_0440200.gif", "traffic"),
-        ("TxDOT I-35W Fort Worth", "https://its.txdot.gov/ITS_WEB/FrontEnd/snapshots/FortWorth/IH0035W_0054300.gif", "traffic"),
-
-        // ── Georgia DOT ──
-        ("GDOT I-85 Atlanta - 14th St", "https://navigator-atl.cdn.mdtapps.com/snap/GDOT-CAM-I-85--003.8--S?r=0", "traffic"),
-        ("GDOT I-75 Atlanta - 10th St", "https://navigator-atl.cdn.mdtapps.com/snap/GDOT-CAM-I-75--249.5--N?r=0", "traffic"),
-        ("GDOT I-285 Atlanta - Peachtree", "https://navigator-atl.cdn.mdtapps.com/snap/GDOT-CAM-I-285--029.0--W?r=0", "traffic"),
-
-        // ── Colorado DOT ──
-        ("CDOT I-70 Eisenhower Tunnel", "https://i.cotrip.org/dimages/camera?imageURL=remote/PRIOR-cam-C070A039.00.jpg&description=I-70%20Eisenhower", "traffic"),
-        ("CDOT I-25 Denver - 6th Ave", "https://i.cotrip.org/dimages/camera?imageURL=remote/PRIOR-cam-C025A208.60.jpg&description=I-25%206th", "traffic"),
-
-        // ── Michigan DOT ──
-        ("MDOT I-75 Detroit - Ambassador Bridge", "https://mdotjboss.state.mi.us/MiDrive/camera/image/0650.01075.13805", "traffic"),
-        ("MDOT I-94 Ann Arbor", "https://mdotjboss.state.mi.us/MiDrive/camera/image/1820.00094.01200", "traffic"),
-        ("MDOT I-96 Grand Rapids", "https://mdotjboss.state.mi.us/MiDrive/camera/image/2050.00096.17200", "traffic"),
-
-        // ── Florida DOT ──
-        ("FDOT I-95 Miami - Golden Glades", "https://fl511.com/map/Cctv/503", "traffic"),
-        ("FDOT I-4 Orlando - Downtown", "https://fl511.com/map/Cctv/1038", "traffic"),
-
-        // ── Arizona DOT ──
-        ("ADOT I-10 Phoenix - 7th Ave", "https://app.az511.gov/map/Cctv/8044", "traffic"),
-        ("ADOT I-17 Phoenix - I-10 Stack", "https://app.az511.gov/map/Cctv/8032", "traffic"),
-    ];
-
-    // No verification — just return them all. The proxy handles the actual fetch.
-    // Dead feeds show "Feed unavailable" in the cam card, which is better than 0 results.
-    catalog.iter().map(|&(name, url, cat)| {
-        let cam_type = if url.contains("mjpg") || url.contains("video.cgi") {
-            "mjpeg"
-        } else {
-            "image"
-        };
-        format!(
-            r#"{{"name":"{}","url":"{}","type":"{}","cat":"{}","source":"DOT"}}"#,
-            jval(name), jval(url), cam_type, jval(cat)
-        )
-    }).collect()
+    // All static WSDOT/MnDOT/FDOT URLs confirmed broken through proxy.
+    // These DOTs block non-browser requests or require session cookies.
+    // Working sources: Caltrans (discovery), NYC TMC (API), 511 state APIs.
+    Vec::new()
 }
 
 // ── Source 2: Caltrans CCTV List Crawler ──────────────────────────────────
@@ -2780,7 +2934,9 @@ fn discover_caltrans(timeout: &str) -> Vec<String> {
             let out = Command::new(curl_cmd())
                 .args([
                     "-s", "-L", "--max-time", &to,
-                    "-H", "User-Agent: Mozilla/5.0 (compatible; WorldMonitor/1.0)",
+                    "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "-H", "Referer: https://cwwp2.dot.ca.gov/",
+                    "-H", "Accept: application/json, */*",
                     &api,
                 ])
                 .output();
@@ -2815,7 +2971,7 @@ fn discover_caltrans(timeout: &str) -> Vec<String> {
                                 s.lock().unwrap().insert(url_val.clone());
                                 let cam_name = extract_caltrans_name(&raw, abs, &dist);
                                 r.lock().unwrap().push(format!(
-                                    r#"{{"name":"{}","url":"{}","type":"image","cat":"traffic","source":"Caltrans {}"}}"#,
+                                    r#"{{"name":"{}","url":"{}","type":"image","cat":"traffic","source":"Caltrans {}","region":"West"}}"#,
                                     jval(&cam_name), jval(&url_val), jval(&dist)
                                 ));
                                 count += 1;
@@ -2845,7 +3001,7 @@ fn discover_caltrans(timeout: &str) -> Vec<String> {
                             s.lock().unwrap().insert(url_val.clone());
                             let cam_name = extract_caltrans_name(&raw, abs, &dist);
                             r.lock().unwrap().push(format!(
-                                r#"{{"name":"{}","url":"{}","type":"image","cat":"traffic","source":"Caltrans {}"}}"#,
+                                r#"{{"name":"{}","url":"{}","type":"image","cat":"traffic","source":"Caltrans {}","region":"West"}}"#,
                                 jval(&cam_name), jval(&url_val), jval(&dist)
                             ));
                             count += 1;
@@ -2863,7 +3019,7 @@ fn discover_caltrans(timeout: &str) -> Vec<String> {
     // If JSON APIs returned nothing, use the one confirmed working URL
     if results.is_empty() {
         results.push(format!(
-            r#"{{"name":"Caltrans I-80 Bay Bridge East Tower","url":"https://cwwp2.dot.ca.gov/data/d4/cctv/image/tvd32i80baybridgesastowereast/tvd32i80baybridgesastowereast.jpg","type":"image","cat":"traffic","source":"Caltrans"}}"#
+            r#"{{"name":"Caltrans I-80 Bay Bridge East Tower","url":"https://cwwp2.dot.ca.gov/data/d4/cctv/image/tvd32i80baybridgesastowereast/tvd32i80baybridgesastowereast.jpg","type":"image","cat":"traffic","source":"Caltrans","region":"West"}}"#
         ));
     }
 
@@ -2906,54 +3062,10 @@ fn extract_caltrans_name(raw: &str, pos: usize, district: &str) -> String {
 // ── Source 3: National Parks + Public Webcams ──────────────────────────────
 
 fn discover_nps_and_public(_timeout: &str) -> Vec<String> {
-    let catalog: Vec<(&str, &str, &str)> = vec![
-        // ── NPS Webcams (direct image URLs) ──
-        ("Glacier NP - Lake McDonald", "https://www.nps.gov/webcams-glac/lmlc.jpg", "weather"),
-        ("Glacier NP - St Mary", "https://www.nps.gov/webcams-glac/stma.jpg", "weather"),
-        ("Glacier NP - Going-to-the-Sun", "https://www.nps.gov/webcams-glac/gtts.jpg", "weather"),
-        ("Glacier NP - Two Medicine", "https://www.nps.gov/webcams-glac/twom.jpg", "weather"),
-        ("Glacier NP - Logan Pass", "https://www.nps.gov/webcams-glac/lopa.jpg", "weather"),
-        ("Grand Canyon - Yavapai Point", "https://www.nps.gov/webcams-grca/grca_yav.jpg", "weather"),
-        ("Mt Rainier - Paradise", "https://www.nps.gov/webcams-mora/prior_prior.jpg", "weather"),
-        ("Mt Rainier - Longmire", "https://www.nps.gov/webcams-mora/prior_longmire.jpg", "weather"),
-        ("Isle Royale - Mott Island", "https://www.nps.gov/webcams-isro/mottisland1.jpg", "weather"),
-        ("Mammoth Cave - Green River", "https://www.nps.gov/webcams-maca/greenriver.jpg", "weather"),
-
-        // ── USGS / Volcano webcams ──
-        ("USGS Kilauea Summit", "https://volcanoes.usgs.gov/observatories/hvo/cams/KIcam/images/M.jpg", "weather"),
-        ("USGS Mauna Loa", "https://volcanoes.usgs.gov/observatories/hvo/cams/MLcam/images/M.jpg", "weather"),
-        ("USGS Mt St Helens - Crater", "https://volcanoes.usgs.gov/observatories/cvo/cams/MSHjohnston/images/M.jpg", "weather"),
-
-        // ── University / Research webcams ──
-        ("Iowa IIHR WC03", "https://iihrwc03.iowa.uiowa.edu/axis-cgi/jpg/image.cgi", "public"),
-
-        // ── FAA / Airport webcams (Alaska) ──
-        ("FAA Juneau Airport", "https://avcams.faa.gov/images/jnu/jnu_rwend8.jpg", "public"),
-        ("FAA Fairbanks Airport", "https://avcams.faa.gov/images/fai/fai_rwend01r.jpg", "public"),
-        ("FAA Anchorage Airport", "https://avcams.faa.gov/images/anc/anc_rwend32.jpg", "public"),
-        ("FAA Bethel Airport", "https://avcams.faa.gov/images/bet/bet_rwend18.jpg", "public"),
-        ("FAA Nome Airport", "https://avcams.faa.gov/images/ome/ome_rwend10.jpg", "public"),
-        ("FAA Kotzebue Airport", "https://avcams.faa.gov/images/otz/otz_rwend08.jpg", "public"),
-        ("FAA Barrow Airport", "https://avcams.faa.gov/images/brw/brw_rwend07.jpg", "public"),
-        ("FAA Kodiak Airport", "https://avcams.faa.gov/images/adq/adq_rwend08.jpg", "public"),
-
-        // ── Weather / Ski resort cams (publicly served) ──
-        ("Jackson Hole Mountain Resort", "https://www.jacksonhole.com/webcam/rendezvousne.jpg", "weather"),
-        ("Mammoth Mountain - Main Lodge", "https://media.mammothmountain.com/Webcam/mainlodge.jpg", "weather"),
-    ];
-
-    // Return all — no verification. Dead feeds show "Feed unavailable" in UI.
-    catalog.iter().map(|&(name, url, cat)| {
-        let cam_type = if url.contains("mjpg") || url.contains("video.cgi") {
-            "mjpeg"
-        } else {
-            "image"
-        };
-        format!(
-            r#"{{"name":"{}","url":"{}","type":"{}","cat":"{}","source":"NPS/Public"}}"#,
-            jval(name), jval(url), cam_type, jval(cat)
-        )
-    }).collect()
+    // All static USGS/NOAA/FAA URLs confirmed broken through proxy.
+    // USGS HVO cams return placeholder images, NOAA/FAA block non-browser requests.
+    // Working sources: NYC TMC (API), Caltrans (discovery), 511 state APIs.
+    Vec::new()
 }
 
 // ── Source 4: Insecam Directory Scraper ───────────────────────────────────
@@ -3045,7 +3157,7 @@ fn extract_insecam_urls(html: &str, page: usize) -> Vec<String> {
 
                     let name = format!("Insecam US #{}", (page - 1) * 40 + results.len() + 1);
                     results.push(format!(
-                        r#"{{"name":"{}","url":"{}","type":"{}","cat":"public","source":"Insecam"}}"#,
+                        r#"{{"name":"{}","url":"{}","type":"{}","cat":"public","source":"Insecam","region":"US"}}"#,
                         jval(&name), jval(url), cam_type
                     ));
                 }
@@ -3064,34 +3176,44 @@ fn extract_insecam_urls(html: &str, page: usize) -> Vec<String> {
 // ── Source 5: 511 State Traffic Camera APIs (expanded) ────────────────────
 
 fn discover_511_all(timeout: &str) -> Vec<String> {
-    let apis: Vec<(&str, &str)> = vec![
-        ("IA 511",  "https://lb.511ia.org/ialb/cameras/camera.json"),
-        ("NE 511",  "https://lb.511.nebraska.gov/nelb/cameras/camera.json"),
-        ("KY 511",  "https://lb.511.ky.gov/kylb/cameras/camera.json"),
-        ("WY 511",  "https://lb.511.wy.gov/wylb/cameras/camera.json"),
-        ("LA 511",  "https://lb.511la.org/lalb/cameras/camera.json"),
-        ("GA 511",  "https://511ga.org/api/cameras?format=json"),
-        ("ID 511",  "https://511.idaho.gov/api/cameras?format=json"),
-        ("NH 511",  "https://www.newengland511.org/api/cameras?format=json"),
-        ("IN 511",  "https://lb.511in.org/inlb/cameras/camera.json"),
-        ("MS 511",  "https://lb.mdottraffic.com/mslb/cameras/camera.json"),
-        ("AR 511",  "https://lb.idrivearkansas.com/arlb/cameras/camera.json"),
-        ("SD 511",  "https://lb.sd511.org/sdlb/cameras/camera.json"),
-        ("ND 511",  "https://lb.511nd.gov/ndlb/cameras/camera.json"),
-        ("ME 511",  "https://lb.newengland511.org/melb/cameras/camera.json"),
+    let apis: Vec<(&str, &str, &str)> = vec![
+        // (source, url, region)
+        ("IA 511",  "https://lb.511ia.org/ialb/cameras/camera.json", "Midwest"),
+        ("NE 511",  "https://lb.511.nebraska.gov/nelb/cameras/camera.json", "Midwest"),
+        ("KY 511",  "https://lb.511.ky.gov/kylb/cameras/camera.json", "Southeast"),
+        ("WY 511",  "https://lb.511.wy.gov/wylb/cameras/camera.json", "West"),
+        ("LA 511",  "https://lb.511la.org/lalb/cameras/camera.json", "South"),
+        ("IN 511",  "https://lb.511in.org/inlb/cameras/camera.json", "Midwest"),
+        ("MS 511",  "https://lb.mdottraffic.com/mslb/cameras/camera.json", "South"),
+        ("AR 511",  "https://lb.idrivearkansas.com/arlb/cameras/camera.json", "South"),
+        ("SD 511",  "https://lb.sd511.org/sdlb/cameras/camera.json", "Midwest"),
+        ("ND 511",  "https://lb.511nd.gov/ndlb/cameras/camera.json", "Midwest"),
+        ("ME 511",  "https://lb.newengland511.org/melb/cameras/camera.json", "Northeast"),
+        ("VA 511",  "https://lb.511virginia.org/valb/cameras/camera.json", "Southeast"),
+        ("TN 511",  "https://lb.smartway.tn.gov/tnlb/cameras/camera.json", "Southeast"),
+        ("KS 511",  "https://lb.kandrive.org/kslb/cameras/camera.json", "Midwest"),
+        ("MO 511",  "https://lb.traveler.modot.org/molb/cameras/camera.json", "Midwest"),
+        ("MT 511",  "https://lb.511mt.net/mtlb/cameras/camera.json", "West"),
+        ("AL 511",  "https://lb.algotraffic.com/allb/cameras/camera.json", "Southeast"),
+        ("SC 511",  "https://lb.511sc.org/sclb/cameras/camera.json", "Southeast"),
+        ("OK 511",  "https://lb.pikepass.com/oklb/cameras/camera.json", "South"),
+        ("NM 511",  "https://lb.nmroads.com/nmlb/cameras/camera.json", "West"),
+        ("WV 511",  "https://lb.wv511.org/wvlb/cameras/camera.json", "Southeast"),
+        ("NH 511",  "https://lb.newengland511.org/nhlb/cameras/camera.json", "Northeast"),
     ];
 
     let results: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let mut handles = Vec::new();
 
-    for (source, url) in apis {
+    for (source, url, region) in apis {
         let r = Arc::clone(&results);
         let to = timeout.to_string();
         let src = source.to_string();
         let api_url = url.to_string();
+        let reg = region.to_string();
 
         handles.push(std::thread::spawn(move || {
-            if let Some(cams) = fetch_511_cameras(&api_url, &src, &to) {
+            if let Some(cams) = fetch_511_cameras(&api_url, &src, &to, &reg) {
                 r.lock().unwrap().extend(cams);
             }
         }));
@@ -3102,11 +3224,12 @@ fn discover_511_all(timeout: &str) -> Vec<String> {
 }
 
 /// Fetch and parse cameras from a 511 API endpoint
-fn fetch_511_cameras(url: &str, source: &str, timeout: &str) -> Option<Vec<String>> {
+fn fetch_511_cameras(url: &str, source: &str, timeout: &str, region: &str) -> Option<Vec<String>> {
     let out = Command::new(curl_cmd())
         .args([
             "-s", "--max-time", timeout,
-            "-H", "User-Agent: Mozilla/5.0 (compatible; WorldMonitor/1.0)",
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "-H", "Accept: application/json, */*",
             url,
         ])
         .output()
@@ -3117,14 +3240,14 @@ fn fetch_511_cameras(url: &str, source: &str, timeout: &str) -> Option<Vec<Strin
     let raw = String::from_utf8_lossy(&out.stdout).to_string();
     if raw.len() < 100 { return None; }
 
-    parse_511_camera_json(&raw, source)
+    parse_511_camera_json(&raw, source, region)
 }
 
 /// Parse 511-style camera JSON. These APIs return arrays of camera objects
 /// with various field names for the image URL.
 /// Accept ANY http URL found under camera-related keys — the proxy handles
 /// the actual fetch, and dead feeds simply show "Feed unavailable" in the UI.
-fn parse_511_camera_json(raw: &str, source: &str) -> Option<Vec<String>> {
+fn parse_511_camera_json(raw: &str, source: &str, region: &str) -> Option<Vec<String>> {
     let mut results = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -3184,8 +3307,8 @@ fn parse_511_camera_json(raw: &str, source: &str) -> Option<Vec<String>> {
                 };
 
                 results.push(format!(
-                    r#"{{"name":"{}","url":"{}","type":"{}","cat":"traffic","source":"{}"}}"#,
-                    jval(&cam_name), jval(&url_val), cam_type, jval(source)
+                    r#"{{"name":"{}","url":"{}","type":"{}","cat":"traffic","source":"{}","region":"{}"}}"#,
+                    jval(&cam_name), jval(&url_val), cam_type, jval(source), jval(region)
                 ));
             }
         }
@@ -3238,6 +3361,117 @@ fn extract_json_name(context: &str, keys: &[&str]) -> Option<String> {
         }
     }
     None
+}
+
+// ── Source 6: NYC DOT Traffic Management Center ──────────────────────────
+// API: https://webcams.nyctmc.org/api/cameras → JSON array of 900+ cameras
+// Image: https://webcams.nyctmc.org/api/cameras/{id}/image → direct JPEG, no auth
+// Each camera has: id (UUID), name, latitude, longitude, area (borough), isOnline
+
+fn discover_nyctmc(timeout: &str) -> Vec<String> {
+    let api_url = "https://webcams.nyctmc.org/api/cameras";
+    eprintln!("[discover-nyctmc] Fetching camera list from {}", api_url);
+
+    let out = match Command::new(curl_cmd())
+        .args([
+            "-s", "--max-time", timeout,
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "-H", "Accept: application/json",
+            api_url,
+        ])
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("[discover-nyctmc] curl error: {}", e);
+            return Vec::new();
+        }
+    };
+
+    if !out.status.success() {
+        eprintln!("[discover-nyctmc] curl failed with exit code {:?}", out.status.code());
+        return Vec::new();
+    }
+
+    let raw = String::from_utf8_lossy(&out.stdout).to_string();
+    if raw.len() < 200 {
+        eprintln!("[discover-nyctmc] Response too short ({} bytes)", raw.len());
+        return Vec::new();
+    }
+
+    eprintln!("[discover-nyctmc] Got {} bytes of camera data", raw.len());
+
+    // Parse JSON array of camera objects:
+    // {"id":"UUID","name":"...","latitude":40.7,"longitude":-73.9,"area":"Manhattan","isOnline":"true"}
+    // We'll parse by scanning for id+name+area fields to build image URLs.
+    let mut results = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Split by "id" field occurrences
+    let id_key = "\"id\"";
+    let mut pos = 0;
+    while pos < raw.len() && results.len() < 200 {
+        let id_pos = match raw[pos..].find(id_key) {
+            Some(p) => pos + p,
+            None => break,
+        };
+
+        // Extract the object context (roughly 500 chars after the id key)
+        let obj_end = std::cmp::min(id_pos + 500, raw.len());
+        let chunk = &raw[id_pos..obj_end];
+
+        // Extract id value
+        let cam_id = match extract_json_field(chunk, "\"id\"") {
+            Some(v) if v.len() > 10 && v.contains('-') => v, // UUID pattern
+            _ => { pos = id_pos + id_key.len(); continue; }
+        };
+
+        // Extract name
+        let name = extract_json_field(chunk, "\"name\"")
+            .unwrap_or_else(|| format!("NYC Cam {}", results.len() + 1));
+
+        // Extract area (borough)
+        let area = extract_json_field(chunk, "\"area\"")
+            .unwrap_or_else(|| "NYC".into());
+
+        // Check isOnline (handles both "true" string and true boolean)
+        let is_online = if let Some(kp) = chunk.find("\"isOnline\"") {
+            let after = &chunk[kp + 10..std::cmp::min(kp + 25, chunk.len())];
+            after.contains("true") || after.contains("True")
+        } else {
+            true // assume online if field missing
+        };
+
+        if !is_online {
+            pos = id_pos + id_key.len();
+            continue;
+        }
+
+        // Build direct image URL
+        let image_url = format!("https://webcams.nyctmc.org/api/cameras/{}/image", cam_id);
+
+        if !seen.contains(&cam_id) {
+            seen.insert(cam_id.clone());
+
+            let display_name = format!("NYC {} — {}", area, name);
+            results.push(format!(
+                r#"{{"name":"{}","url":"{}","type":"image","cat":"traffic","source":"NYC DOT","region":"Northeast"}}"#,
+                jval(&display_name), jval(&image_url)
+            ));
+        }
+
+        pos = id_pos + id_key.len();
+    }
+
+    eprintln!("[discover-nyctmc] Parsed {} online cameras", results.len());
+    results
+}
+
+/// Extract a JSON field value from a chunk of JSON text
+fn extract_json_field(chunk: &str, key: &str) -> Option<String> {
+    let kp = chunk.find(key)?;
+    let after = &chunk[kp + key.len()..];
+    extract_json_string_after(after)
 }
 
 // ── OpenSky Flight Discovery ──────────────────────────────────────────────
@@ -3324,12 +3558,22 @@ fn do_rt_cam_proxy(_st: &Shared, path: &str) -> Vec<u8> {
         return http_error_response(400, b"No url parameter");
     }
 
-    // Use short timeout — MJPEG streams are continuous, we just want a snapshot
+    // Derive Referer from the camera URL's origin — DOT servers need this
+    let referer = {
+        if let Some(idx) = url.find("://") {
+            let after = &url[idx + 3..];
+            let host_end = after.find('/').unwrap_or(after.len());
+            format!("{}/", &url[..idx + 3 + host_end])
+        } else { String::new() }
+    };
+
     let out = Command::new(curl_cmd())
         .args([
             "-s", "-L",
-            "--max-time", "4",
-            "-H", "User-Agent: Mozilla/5.0 (compatible; WorldMonitor/1.0)",
+            "--max-time", "8",
+            "-H", "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "-H", &format!("Referer: {}", referer),
+            "-H", "Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             &url,
         ])
         .output();

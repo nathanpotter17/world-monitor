@@ -969,8 +969,10 @@ function discoverAddCam(index) {
     name: cam.name || "Discovered Cam",
     url: cam.url,
     type: cam.type || "image",
-    refresh: cam.type === "mjpeg" ? 5 : 15,
+    refresh: cam.type === "mjpeg" ? 5 : cam.type === "iframe" ? 0 : 15,
     cat: cam.cat || "traffic",
+    source: cam.source || "",
+    region: cam.region || "",
     status: "ok"
   };
   rtCameras.push(newCam);
@@ -996,8 +998,10 @@ function discoverAddBatchCams(n) {
       name: cam.name || "Discovered Cam",
       url: cam.url,
       type: cam.type || "image",
-      refresh: cam.type === "mjpeg" ? 5 : 15,
+      refresh: cam.type === "mjpeg" ? 5 : cam.type === "iframe" ? 0 : 15,
       cat: cam.cat || "traffic",
+      source: cam.source || "",
+      region: cam.region || "",
       status: "ok"
     });
     added++;
@@ -1023,8 +1027,10 @@ function discoverAddSourceCams(source) {
       name: cam.name || "Discovered Cam",
       url: cam.url,
       type: cam.type || "image",
-      refresh: cam.type === "mjpeg" ? 5 : 15,
+      refresh: cam.type === "mjpeg" ? 5 : cam.type === "iframe" ? 0 : 15,
       cat: cam.cat || "traffic",
+      source: cam.source || "",
+      region: cam.region || "",
       status: "ok"
     });
     added++;
@@ -1050,8 +1056,10 @@ function discoverAddAllCams() {
       name: cam.name || "Discovered Cam",
       url: cam.url,
       type: cam.type || "image",
-      refresh: cam.type === "mjpeg" ? 5 : 15,
+      refresh: cam.type === "mjpeg" ? 5 : cam.type === "iframe" ? 0 : 15,
       cat: cam.cat || "traffic",
+      source: cam.source || "",
+      region: cam.region || "",
       status: "ok"
     });
     added++;
@@ -1200,7 +1208,6 @@ async function addCam() {
 
   toast("Validating feed...");
 
-  // Validate camera URL via server-side curl
   let validated = false;
   try {
     const check = await (
@@ -1211,9 +1218,11 @@ async function addCam() {
       })
     ).json();
 
-    if (check.up) {
+    if (check.image_valid) {
       validated = true;
-      rtLog("Camera validated: " + name + " (HTTP " + (check.http_code || "ok") + ")", "ok");
+      rtLog("Camera validated: " + name + " — real image " + (check.size || "") + " (HTTP " + (check.http_code || "ok") + ")", "ok");
+    } else if (check.up) {
+      rtLog("Camera reachable but unverified: " + name + " — " + (check.detail || "unknown") + " (adding anyway)", "warn");
     } else {
       rtLog("Camera unreachable: " + name + " — " + (check.detail || "failed") + " (adding anyway)", "warn");
     }
@@ -1260,17 +1269,15 @@ function removeAllCams() {
 }
 
 function startCamRefresh(cam) {
-  // ALL camera types auto-refresh via server proxy (snapshot mode)
-  // This handles MJPEG (extracts single frame), still images, and CORS
-  const interval = cam.type === "mjpeg" ? Math.max(cam.refresh, 3) : cam.refresh;
-  if (cam.type !== "iframe") {
-    rtCamTimers[cam.id] = setInterval(() => {
+  // Skip iframes (YouTube embeds) and cameras with no refresh interval
+  if (cam.type === "iframe" || !cam.refresh) return;
+  const interval = cam.type === "mjpeg" ? Math.max(cam.refresh, 3) : Math.max(cam.refresh, 10);
+  rtCamTimers[cam.id] = setInterval(() => {
       const img = document.querySelector(`[data-cam-id="${cam.id}"] img`);
       if (img) {
         img.src = "/api/rt/cam/proxy?url=" + encodeURIComponent(cam.url) + "&_t=" + Date.now();
       }
     }, interval * 1000);
-  }
 }
 
 function refreshAllCams() {
@@ -1290,33 +1297,67 @@ function renderCams() {
   const grid = $("cam-grid");
   $("cam-count").textContent = rtCameras.length;
 
+  // Populate filter dropdowns dynamically
+  const srcSet = new Set();
+  const regSet = new Set();
+  rtCameras.forEach(c => {
+    if (c.source) srcSet.add(c.source);
+    if (c.region) regSet.add(c.region);
+  });
+  const srcSel = $("cam-filter-source");
+  const regSel = $("cam-filter-region");
+  if (srcSel) {
+    const cur = srcSel.value;
+    srcSel.innerHTML = '<option value="">All Sources</option>' +
+      [...srcSet].sort().map(s => '<option value="' + E(s) + '"' + (s === cur ? ' selected' : '') + '>' + E(s) + '</option>').join('');
+  }
+  if (regSel) {
+    const cur = regSel.value;
+    regSel.innerHTML = '<option value="">All Regions</option>' +
+      [...regSet].sort().map(r => '<option value="' + E(r) + '"' + (r === cur ? ' selected' : '') + '>' + E(r) + '</option>').join('');
+  }
+
+  // Apply filters
+  const filtered = getFilteredCams();
+  const statusEl = $("cam-filter-status");
+  if (statusEl) {
+    statusEl.textContent = filtered.length < rtCameras.length
+      ? filtered.length + " / " + rtCameras.length + " shown" : "";
+  }
+
   if (!rtCameras.length) {
     grid.innerHTML =
-      '<div class="cam-empty">' +
-      '<div class="cam-empty-icon">&#x1f4f7;</div>' +
+      '<div class="cam-empty"><div class="cam-empty-icon">&#x1f4f7;</div>' +
       "<p>No camera feeds added.</p>" +
       '<p class="cam-empty-hint">Add public DOT traffic cams, weather station feeds, or any MJPEG/image stream URL.</p>' +
-      '<button class="pri" onclick="openAddCam()" style="margin-top:10px">+ Add Camera Feed</button>' +
-      "</div>";
+      '<button class="pri" onclick="openAddCam()" style="margin-top:10px">+ Add Camera Feed</button></div>';
     return;
   }
 
-  grid.innerHTML = rtCameras
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="cam-empty"><p>No cameras match current filters.</p></div>';
+    return;
+  }
+
+  grid.innerHTML = filtered
     .map((cam) => {
       const proxyUrl = "/api/rt/cam/proxy?url=" + encodeURIComponent(cam.url) + "&_t=" + Date.now();
       let viewHtml;
       if (cam.type === "iframe") {
-        viewHtml = '<iframe src="' + E(cam.url) + '" sandbox="allow-scripts allow-same-origin" loading="lazy"></iframe>';
+        viewHtml = '<iframe src="' + E(cam.url) + '" sandbox="allow-scripts allow-same-origin" loading="lazy" allow="autoplay; encrypted-media"></iframe>';
       } else {
-        // ALL image types (still + MJPEG) go through proxy snapshot
-        viewHtml = '<img src="' + E(proxyUrl) + '" alt="' + E(cam.name) + '" onerror="this.outerHTML=\'<div class=cam-err>Feed unavailable</div>\'">';
+        viewHtml = '<a href="' + E(cam.url) + '" target="_blank" rel="noopener" title="Open camera source" style="display:block;width:100%;height:100%">' +
+          '<img src="' + E(proxyUrl) + '" alt="' + E(cam.name) + '" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.parentElement.outerHTML=\'<div class=cam-err onclick=refreshAllCams() style=cursor:pointer title=Click_to_retry>Feed unavailable — tap to retry</div>\'">' +
+          '</a>';
       }
 
       const catLabel = CAM_CAT_LABELS[cam.cat] || cam.cat;
-      const liveLabel = cam.type === "mjpeg" ? '<div class="cam-live-bar">LIVE</div>' : "";
+      const liveLabel = cam.type === "mjpeg" ? '<div class="cam-live-bar">LIVE</div>'
+        : cam.type === "iframe" ? '<div class="cam-live-bar" style="background:rgba(59,130,246,.85)">STREAM</div>' : "";
       const statusBadge = cam.status === "unverified"
-        ? '<span class="cam-tag" style="background:var(--st-yl-bg);color:var(--yl);border:1px solid var(--yl)">?</span>'
-        : "";
+        ? '<span class="cam-tag" style="background:var(--st-yl-bg);color:var(--yl);border:1px solid var(--yl)">?</span>' : "";
+      const regionBadge = cam.region
+        ? '<span class="cam-tag" style="opacity:.7">' + E(cam.region) + '</span>' : "";
 
       return (
         '<div class="cam-card" data-cam-id="' + cam.id + '">' +
@@ -1325,6 +1366,7 @@ function renderCams() {
         '<span class="cam-name">' + E(cam.name) + "</span>" +
         statusBadge +
         '<span class="cam-tag">' + E(catLabel) + "</span>" +
+        regionBadge +
         '<div class="cam-actions">' +
         '<button onclick="removeCam(\'' + cam.id + "')\">&#x2715;</button>" +
         "</div></div></div>"
@@ -1333,7 +1375,71 @@ function renderCams() {
     .join("");
 
   // Update live dot
-  $("rt-live-dot").className = "tab-live-dot" + (rtCameras.length > 0 ? " active" : "");
+  const hasActive = rtCameras.length > 0 || rtServices.length > 0;
+  $("rt-live-dot").className = "tab-live-dot" + (hasActive ? " active" : "");
+
+  // Refresh global region filter
+  populateGlobalRegionFilter();
+}
+
+/** Get cameras filtered by current filter bar settings */
+function getFilteredCams() {
+  const srcFilter = ($("cam-filter-source") || {}).value || "";
+  const regFilter = ($("cam-filter-region") || {}).value || "";
+  const catFilter = ($("cam-filter-cat") || {}).value || "";
+  const searchFilter = (($("cam-filter-search") || {}).value || "").toLowerCase().trim();
+  const globalRegion = ($("rt-region-filter") || {}).value || "";
+
+  return rtCameras.filter(c => {
+    if (srcFilter && (c.source || "") !== srcFilter) return false;
+    if (regFilter && (c.region || "") !== regFilter) return false;
+    if (catFilter && (c.cat || "") !== catFilter) return false;
+    if (searchFilter && !(c.name || "").toLowerCase().includes(searchFilter)) return false;
+    if (globalRegion && (c.region || "") !== globalRegion) return false;
+    return true;
+  });
+}
+
+function applyCamFilters() { renderCams(); }
+
+/** Populate and apply the global region filter (cameras + flights) */
+function applyGlobalRegionFilter() {
+  renderCams();
+  renderFlights();
+  updateGlobalRegionStatus();
+}
+
+function updateGlobalRegionStatus() {
+  const region = ($("rt-region-filter") || {}).value || "";
+  const statusEl = $("rt-region-status");
+  if (!statusEl) return;
+  if (!region) { statusEl.textContent = ""; return; }
+  const camCount = getFilteredCams().length;
+  const flightCount = getFilteredFlights().length;
+  statusEl.textContent = camCount + " cam" + (camCount !== 1 ? "s" : "") + ", " + flightCount + " flight" + (flightCount !== 1 ? "s" : "");
+}
+
+/** Populate the global region dropdown from all sources (cameras + flights) */
+function populateGlobalRegionFilter() {
+  const regSet = new Set();
+  rtCameras.forEach(c => { if (c.region) regSet.add(c.region); });
+  rtFlights.forEach(f => { if (f.origin) regSet.add(f.origin); });
+
+  const sel = $("rt-region-filter");
+  if (!sel) return;
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">All Regions</option>' +
+    [...regSet].sort().map(r => '<option value="' + E(r) + '"' + (r === cur ? ' selected' : '') + '>' + E(r) + '</option>').join('');
+}
+
+/** Get flights filtered by global region */
+function getFilteredFlights() {
+  const globalRegion = ($("rt-region-filter") || {}).value || "";
+  if (!globalRegion) return rtFlights;
+  return rtFlights.filter(f => {
+    // Match by origin country or by region tag
+    return (f.origin || "") === globalRegion || (f.region || "") === globalRegion;
+  });
 }
 
 
@@ -1415,11 +1521,29 @@ async function checkFlight(flight) {
       // Store rich data from OpenSky/ADS-B
       flight.data = data.info || null;
       flight.position = data.position || null;
+      flight.latitude = data.latitude || null;
+      flight.longitude = data.longitude || null;
       flight.altitude = data.altitude || null;
+      flight.baro_altitude = data.baro_altitude || null;
+      flight.geo_altitude = data.geo_altitude || null;
       flight.velocity = data.velocity || null;
       flight.heading = data.heading || null;
+      flight.vertical_rate = data.vertical_rate || null;
       flight.origin = data.origin_country || null;
       flight.on_ground = data.on_ground || false;
+      flight.icao = data.icao || flight.icao || null;
+      flight.squawk = data.squawk || null;
+      flight.spi = data.spi || false;
+      flight.position_source = data.position_source || null;
+      flight.category = data.category || null;
+      flight.category_id = data.category_id || null;
+      flight.time_position = data.time_position || null;
+      flight.last_contact = data.last_contact || null;
+      flight.departure = data.departure || flight.departure || null;
+      flight.destination = data.destination || flight.destination || null;
+      flight.operator = data.operator || flight.operator || null;
+      flight.flight_number = data.flight_number || flight.flight_number || null;
+      flight.airline = data.airline || flight.airline || null;
       const detail = data.info || data.status || "checked";
       rtLog("Flight " + flight.callsign + ": " + detail, data.status === "error" ? "err" : "ok");
     }
@@ -1438,6 +1562,119 @@ function checkAllFlights() {
   toast("Checking all flights...");
 }
 
+/** Open a detail modal for a flight */
+function openFlightDetail(flightId) {
+  const f = rtFlights.find(x => x.id === flightId);
+  if (!f) return;
+
+  $("fdm-title").textContent = f.callsign + (f.airline ? " — " + f.airline : "");
+
+  // Build detail grid
+  let html = '<div class="fdm-grid">';
+
+  // Identity section
+  html += '<div class="fdm-label">Callsign</div><div class="fdm-val large">' + E(f.callsign) + '</div>';
+  if (f.airline) html += '<div class="fdm-label">Airline</div><div class="fdm-val">' + E(f.airline) + '</div>';
+  if (f.icao) html += '<div class="fdm-label">ICAO 24-bit</div><div class="fdm-val" style="font-family:monospace">' + E(f.icao) + '</div>';
+  html += '<div class="fdm-label">Status</div><div class="fdm-val">' + E(f.status || "unknown") + '</div>';
+  html += '<div class="fdm-label">Source</div><div class="fdm-val">' + E(f.source || "—") + '</div>';
+  if (f.origin) html += '<div class="fdm-label">Country</div><div class="fdm-val">' + E(f.origin) + '</div>';
+
+  // Aircraft classification
+  if (f.category) {
+    html += '<div class="fdm-label">Aircraft Type</div><div class="fdm-val">' + E(f.category) + '</div>';
+  }
+  if (f.squawk) {
+    let sqkNote = "";
+    if (f.squawk === "7500") sqkNote = ' <span style="color:var(--rd);font-weight:700">HIJACK</span>';
+    else if (f.squawk === "7600") sqkNote = ' <span style="color:var(--yl);font-weight:700">RADIO FAILURE</span>';
+    else if (f.squawk === "7700") sqkNote = ' <span style="color:var(--rd);font-weight:700">EMERGENCY</span>';
+    html += '<div class="fdm-label">Squawk</div><div class="fdm-val" style="font-family:monospace;font-size:15px;font-weight:600">' + E(f.squawk) + sqkNote + '</div>';
+  }
+  if (f.spi) {
+    html += '<div class="fdm-label">SPI</div><div class="fdm-val" style="color:var(--yl)">IDENT ACTIVE</div>';
+  }
+  if (f.position_source) {
+    html += '<div class="fdm-label">Position Src</div><div class="fdm-val">' + E(f.position_source) + '</div>';
+  }
+
+  html += '<div class="fdm-divider"></div>';
+
+  // Route
+  html += '<div class="fdm-label">Departure</div><div class="fdm-val">' + E(f.departure || "—") + '</div>';
+  html += '<div class="fdm-label">Destination</div><div class="fdm-val">' + E(f.destination || "—") + '</div>';
+
+  html += '<div class="fdm-divider"></div>';
+
+  // Position & dynamics
+  if (f.position && f.position !== "unknown") {
+    html += '<div class="fdm-label">Position</div><div class="fdm-val">' + E(f.position);
+    if (f.latitude != null && f.longitude != null) {
+      html += ' <a href="https://www.google.com/maps?q=' + f.latitude + ',' + f.longitude + '" target="_blank" rel="noopener" style="font-size:10px;margin-left:6px">Map ↗</a>';
+    }
+    html += '</div>';
+  }
+  if (f.altitude != null) {
+    const altFt = Math.round(f.altitude * 3.28084);
+    html += '<div class="fdm-label">Altitude</div><div class="fdm-val">' + Math.round(f.altitude).toLocaleString() + ' m (' + altFt.toLocaleString() + ' ft)';
+    if (f.baro_altitude != null && f.geo_altitude != null && f.baro_altitude !== f.geo_altitude) {
+      html += '<br><span style="font-size:10px;color:var(--tx2)">Baro: ' + Math.round(f.baro_altitude).toLocaleString() + 'm | Geo: ' + Math.round(f.geo_altitude).toLocaleString() + 'm</span>';
+    }
+    html += '</div>';
+  }
+  if (f.velocity != null) {
+    const kts = Math.round(f.velocity * 1.94384);
+    const kmh = Math.round(f.velocity * 3.6);
+    html += '<div class="fdm-label">Ground Speed</div><div class="fdm-val">' + Math.round(f.velocity) + ' m/s (' + kts + ' kts / ' + kmh + ' km/h)</div>';
+  }
+  if (f.heading != null) {
+    const dirs = ["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];
+    const dir = dirs[Math.round(f.heading / 22.5) % 16];
+    html += '<div class="fdm-label">Heading</div><div class="fdm-val">' + Math.round(f.heading) + '\u00b0 ' + dir + '</div>';
+  }
+  if (f.vertical_rate != null && f.vertical_rate !== 0) {
+    const fpm = Math.round(f.vertical_rate * 196.85);
+    const arrow = f.vertical_rate > 0 ? "\u2197\ufe0f" : "\u2198\ufe0f";
+    html += '<div class="fdm-label">Vertical Rate</div><div class="fdm-val">' + arrow + ' ' + f.vertical_rate.toFixed(1) + ' m/s (' + fpm.toLocaleString() + ' fpm)</div>';
+  }
+  if (f.on_ground) {
+    html += '<div class="fdm-label">Ground</div><div class="fdm-val" style="color:var(--yl);font-weight:600">ON GROUND</div>';
+  }
+
+  html += '<div class="fdm-divider"></div>';
+
+  // Timestamps
+  if (f.time_position) {
+    const d = new Date(f.time_position * 1000);
+    html += '<div class="fdm-label">Pos Update</div><div class="fdm-val">' + d.toLocaleTimeString() + '</div>';
+  }
+  if (f.last_contact) {
+    const d = new Date(f.last_contact * 1000);
+    html += '<div class="fdm-label">Last Contact</div><div class="fdm-val">' + d.toLocaleTimeString() + '</div>';
+  }
+  html += '<div class="fdm-label">Last Check</div><div class="fdm-val">' + E(f.lastCheck || "—") + '</div>';
+  if (f.notes) html += '<div class="fdm-label">Notes</div><div class="fdm-val">' + E(f.notes) + '</div>';
+
+  html += '</div>';
+  $("fdm-body").innerHTML = html;
+
+  // External links
+  const cs = (f.callsign || "").replace(/\s/g, "");
+  $("fdm-track-link").href = "https://www.flightaware.com/live/flight/" + encodeURIComponent(cs);
+  $("fdm-opensky-link").href = f.icao
+    ? "https://opensky-network.org/aircraft-profile?icao24=" + encodeURIComponent(f.icao)
+    : "https://opensky-network.org/network/explorer?callsign=" + encodeURIComponent(cs);
+
+  // Refresh button
+  $("fdm-refresh").onclick = function() {
+    closeModal("flight-detail-modal");
+    checkFlight(f);
+    setTimeout(function() { openFlightDetail(f.id); }, 3000);
+  };
+
+  $("flight-detail-modal").classList.add("open");
+}
+
 function renderFlights() {
   $("flight-count").textContent = rtFlights.length;
   const table = $("flight-table");
@@ -1453,7 +1690,14 @@ function renderFlights() {
   table.style.display = "table";
   empty.style.display = "none";
 
-  tbody.innerHTML = rtFlights
+  // Apply global region filter
+  const filtered = getFilteredFlights();
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--tx2);padding:16px">No flights match current region filter.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = filtered
     .map((f) => {
       const stClass =
         f.status === "tracked" || f.status === "active"
@@ -1464,45 +1708,55 @@ function renderFlights() {
           ? "st-pend"
           : "st-unk";
 
-      // Build a detail string from rich data if available
-      let detail = f.notes || "";
-      if (f.position) {
-        detail = "Pos: " + f.position;
-      }
+      const dep = f.departure || "\u2014";
+      const dest = f.destination || "\u2014";
+
+      // Build a detail string from rich data
+      let detail = "";
+      if (f.position && f.position !== "unknown") detail = "Pos: " + f.position;
       if (f.altitude != null) {
-        detail += (detail ? " | " : "") + "Alt: " + f.altitude + "m";
+        const altFt = Math.round(f.altitude * 3.28084);
+        detail += (detail ? " | " : "") + "Alt: " + altFt.toLocaleString() + "ft";
       }
       if (f.velocity != null) {
-        detail += (detail ? " | " : "") + "Spd: " + Math.round(f.velocity) + "m/s";
+        const kts = Math.round(f.velocity * 1.94384);
+        detail += (detail ? " | " : "") + "Spd: " + kts + "kts";
       }
-      if (f.heading != null) {
-        detail += (detail ? " | " : "") + "Hdg: " + Math.round(f.heading) + "\u00b0";
+      if (f.vertical_rate != null && Math.abs(f.vertical_rate) > 0.5) {
+        const fpm = Math.round(f.vertical_rate * 196.85);
+        detail += (detail ? " | " : "") + (fpm > 0 ? "\u2197" : "\u2198") + Math.abs(fpm) + "fpm";
       }
-      if (f.origin) {
-        detail += (detail ? " | " : "") + f.origin;
-      }
-      if (f.on_ground) {
-        detail += (detail ? " | " : "") + "ON GROUND";
-      }
-      if (!detail && f.data) {
-        detail = typeof f.data === "string" ? f.data : JSON.stringify(f.data);
-      }
+      if (f.origin) detail += (detail ? " | " : "") + f.origin;
+      if (f.on_ground) detail += (detail ? " | " : "") + "ON GROUND";
+      if (!detail && f.notes) detail = f.notes;
+      if (!detail && f.data) detail = typeof f.data === "string" ? f.data : JSON.stringify(f.data);
       if (!detail) detail = "\u2014";
 
+      // Squawk alert badges
+      let sqkBadge = "";
+      if (f.squawk === "7700") sqkBadge = '<span style="background:#e74c3c;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:4px;font-weight:700">EMERGENCY</span>';
+      else if (f.squawk === "7600") sqkBadge = '<span style="background:#f39c12;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:4px;font-weight:700">RADIO</span>';
+      else if (f.squawk === "7500") sqkBadge = '<span style="background:#e74c3c;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px;margin-left:4px;font-weight:700">HIJACK</span>';
+
       return (
-        "<tr>" +
-        "<td><b>" + E(f.callsign) + "</b></td>" +
-        "<td>" + E(f.source) + "</td>" +
+        '<tr onclick="openFlightDetail(\'' + f.id + '\')" title="Click for details">' +
+        "<td><b>" + E(f.callsign) + "</b>" + sqkBadge + (f.airline ? " <span style='opacity:.5;font-size:10px'>" + E(f.airline) + "</span>" : (f.operator ? " <span style='opacity:.5;font-size:10px'>" + E(f.operator) + "</span>" : "")) + "</td>" +
+        "<td>" + E(f.source) + (f.category ? "<br><span style='font-size:9px;opacity:.5'>" + E(f.category) + "</span>" : "") + "</td>" +
         '<td class="' + stClass + '">' + E(f.status) + "</td>" +
-        "<td style='font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" + E(detail) + "</td>" +
+        "<td>" + E(dep) + "</td>" +
+        "<td>" + E(dest) + "</td>" +
+        "<td style='font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'>" + E(detail) + "</td>" +
         "<td>" + E(f.lastCheck || "\u2014") + "</td>" +
-        "<td>" +
+        '<td onclick="event.stopPropagation()">' +
         '<button onclick="checkFlight(rtFlights.find(x=>x.id===\'' + f.id + '\'))" title="Refresh">&#x27f3;</button> ' +
         '<button onclick="removeFlight(\'' + f.id + '\')" title="Remove">&#x2715;</button>' +
         "</td></tr>"
       );
     })
     .join("");
+
+  populateGlobalRegionFilter();
+  updateGlobalRegionStatus();
 }
 
 
@@ -1716,6 +1970,42 @@ async function loadRtState() {
       rtServices.forEach((s) => startSvcTimer(s));
     }
   } catch (_) {}
+
+  // Seed default services if none are configured
+  if (!rtServices.length) {
+    seedDefaultServices();
+  }
+}
+
+/** Seed the service monitor with essential internet infrastructure services */
+function seedDefaultServices() {
+  const defaults = [
+    { name: "Google",          url: "https://www.google.com",      method: "http", interval: 60 },
+    { name: "Cloudflare DNS",  url: "https://1.1.1.1",             method: "http", interval: 60 },
+    { name: "Cloudflare",      url: "https://www.cloudflare.com",  method: "http", interval: 120 },
+    { name: "AWS",             url: "https://aws.amazon.com",      method: "http", interval: 120 },
+    { name: "GitHub",          url: "https://github.com",          method: "http", interval: 120 },
+    { name: "OpenAI",          url: "https://api.openai.com",      method: "http", interval: 120 },
+    { name: "YouTube",         url: "https://www.youtube.com",     method: "http", interval: 120 },
+    { name: "Reddit",          url: "https://www.reddit.com",      method: "http", interval: 120 },
+    { name: "Anthropic",       url: "https://www.anthropic.com",   method: "http", interval: 120 },
+    { name: "Google DNS",      url: "https://dns.google",           method: "http", interval: 60 },
+    { name: "Quad9 DNS",       url: "https://dns.quad9.net",        method: "http", interval: 60 },
+  ];
+
+  defaults.forEach(d => {
+    const svc = {
+      id: uid(), name: d.name, url: d.url, method: d.method,
+      interval: d.interval, status: "unknown", latency: null, lastCheck: null,
+    };
+    rtServices.push(svc);
+    startSvcTimer(svc);
+  });
+
+  renderSvcs();
+  saveSvcsToServer();
+  rtLog("Seeded " + defaults.length + " default service monitors", "ok");
+  setTimeout(() => checkAllSvcs(), 500);
 }
 
 

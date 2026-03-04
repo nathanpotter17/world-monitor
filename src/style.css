@@ -916,3 +916,50 @@ details[open] > .disc-summary::before { transform: rotate(90deg); }
   flex-shrink: 0;
   padding: 0 6px;
 }
+/* Global Region Filter */
+.rt-global-filter {
+  display: flex;
+  align-items: center;
+  padding: 8px 0 4px;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* Clickable flight rows */
+.rt-table tbody tr {
+  cursor: pointer;
+  transition: background .12s;
+}
+.rt-table tbody tr:hover {
+  background: var(--sf2);
+}
+.rt-table tbody tr td:last-child {
+  cursor: default;
+}
+
+/* Flight detail modal body */
+.fdm-grid {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 4px 12px;
+}
+.fdm-label {
+  color: var(--tx2);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .5px;
+}
+.fdm-val {
+  font-weight: 500;
+  word-break: break-all;
+}
+.fdm-val.large {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.fdm-divider {
+  grid-column: 1 / -1;
+  border-bottom: 1px solid var(--bd);
+  margin: 6px 0;
+}
