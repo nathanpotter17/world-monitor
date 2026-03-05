@@ -9,7 +9,7 @@
 <body>
 
 <div class="top panel">
-<h1><em>&#x2295;</em> WORLD MONITOR</h1>
+<h1>WORLD MONITOR</h1>
 <div class="tr">
 <span class="badge label-caps status-off" id="badge">OFF</span>
 <div class="bud"><span id="bl">&mdash;</span><span id="bt" style="color:var(--yl);display:none"></span><div class="bar"><div class="fill" id="bf"></div></div></div>
@@ -18,21 +18,8 @@
 </div>
 </div>
 
-<!-- Tab Bar -->
-<div class="tab-bar panel">
-<button class="tab active" id="tab-news" onclick="switchTab('news')">
-<span class="tab-icon">&#x1f4f0;</span> NewsMonitor
-</button>
-<button class="tab" id="tab-rt" onclick="switchTab('rt')">
-<span class="tab-icon">&#x1f4e1;</span> RTMonitor
-<span class="tab-live-dot" id="rt-live-dot"></span>
-</button>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- NEWS MONITOR TAB                                                   -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="tab-content active" id="tc-news">
+<!-- NEWS MONITOR -->
+<div id="tc-news">
 
 <div class="cmd panel">
 <div class="cmd-row">
@@ -71,129 +58,6 @@
 
 </div>
 
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<!-- RT MONITOR TAB                                                     -->
-<!-- ═══════════════════════════════════════════════════════════════════ -->
-<div class="tab-content" id="tc-rt">
-
-<!-- RT Command Bar -->
-<div class="cmd panel">
-<div class="cmd-row">
-<input class="cmd-input" id="rt-qi" placeholder="Ask AI about RT sources, cameras, flights, public devices..." onkeydown="if(event.key==='Enter')rtAsk()">
-<button class="cmd-send pri" onclick="rtAsk()">Ask AI</button>
-</div>
-<div class="chips">
-<span class="chip disc-chip" onclick="runDiscovery('all')">&#x1f50d; Discover All</span>
-<span class="chip disc-chip" onclick="runDiscovery('cameras')">&#x1f4f7; Find Cameras</span>
-<span class="chip disc-chip" onclick="runDiscovery('flights')">&#x2708;&#xfe0f; Find Flights</span>
-<span class="chip" onclick="rtAskQ('Summarize the status of all my monitored services')">&#x1f4ca; Service Status</span>
-<span class="chip" onclick="rtAskQ('What public AIS maritime tracking feeds exist?')">&#x1f6a2; Maritime</span>
-<span class="chip" onclick="rtAskQ('What are good OSINT sources for real-time public monitoring?')">&#x1f50d; OSINT Sources</span>
-</div>
-</div>
-
-<!-- RT AI Panel -->
-<div class="ai-panel" id="rt-aip">
-<div class="ai-box panel">
-<div class="ai-label label-caps" id="rt-ai-label"><span>&#x1f916; AI Response</span><button class="ai-close btn-ghost" onclick="closeRtAI()">&times;</button></div>
-<div class="ai-text" id="rt-ait"></div>
-<div class="ai-meta" id="rt-aim"></div>
-</div>
-</div>
-
-<div class="main">
-
-<!-- Global region filter — applies to cameras AND flights -->
-<div class="rt-global-filter" id="rt-global-filter">
-<span style="font-size:11px;color:var(--tx2);margin-right:4px">&#x1f30e; Region:</span>
-<select id="rt-region-filter" onchange="applyGlobalRegionFilter()" style="padding:4px 6px;font-size:11px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--tx)">
-<option value="">All Regions</option>
-</select>
-<span id="rt-region-status" style="color:var(--tx2);font-size:11px;margin-left:6px"></span>
-</div>
-
-<!-- Camera Feeds -->
-<div class="rt-section">
-<div class="rt-sec-head">
-<div class="rt-sec-title"><span>&#x1f4f7;</span><span class="label-caps">Public Camera Feeds</span><span class="rt-count" id="cam-count">0</span></div>
-<div class="rt-sec-actions">
-<button onclick="refreshAllCams()">&#x27f3; Refresh All</button>
-<button class="danger" onclick="removeAllCams()">&#x2715; Remove All</button>
-<button class="pri" onclick="openAddCam()">+ Add Feed</button>
-</div>
-</div>
-<div class="rt-sec-desc">Monitor publicly accessible traffic cameras, weather stations, and live image streams.</div>
-<div class="cam-filter-bar" id="cam-filter-bar">
-<select id="cam-filter-source" onchange="applyCamFilters()" style="padding:4px 6px;font-size:11px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--tx);max-width:140px"><option value="">All Sources</option></select>
-<select id="cam-filter-region" onchange="applyCamFilters()" style="padding:4px 6px;font-size:11px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--tx);max-width:140px"><option value="">All Regions</option></select>
-<select id="cam-filter-cat" onchange="applyCamFilters()" style="padding:4px 6px;font-size:11px;border:1px solid var(--bd);border-radius:4px;background:var(--bg);color:var(--tx)">
-<option value="">All Types</option><option value="traffic">Traffic</option><option value="weather">Weather</option><option value="public">Public</option>
-</select>
-<input type="text" id="cam-filter-search" placeholder="Search cameras..." oninput="applyCamFilters()" style="padding:4px 6px;font-size:11px;border:1px solid var(--bd);border-radius:4px;background:var(--bg2);color:var(--tx);flex:1;min-width:100px">
-<span id="cam-filter-status" style="color:var(--tx2);font-size:11px;white-space:nowrap"></span>
-</div>
-<div class="cam-grid" id="cam-grid">
-<div class="cam-empty" id="cam-empty">
-<div class="cam-empty-icon">&#x1f4f7;</div>
-<p>No camera feeds added.</p>
-<p class="cam-empty-hint">Add public DOT traffic cams, weather station feeds, or any MJPEG/image stream URL.</p>
-<button class="pri" onclick="openAddCam()" style="margin-top:10px">+ Add Camera Feed</button>
-</div>
-</div>
-</div>
-
-<!-- Flight Tracker -->
-<div class="rt-section">
-<div class="rt-sec-head">
-<div class="rt-sec-title"><span>&#x2708;&#xfe0f;</span><span class="label-caps">Flight Tracker</span><span class="rt-count" id="flight-count">0</span></div>
-<div class="rt-sec-actions">
-<button onclick="checkAllFlights()">&#x27f3; Check All</button>
-<button class="danger" onclick="removeAllFlights()">&#x2715; Remove All</button>
-<button onclick="openAddFlight()">+ Track Flight</button>
-</div>
-</div>
-<div class="rt-sec-desc">Track flights using public ADS-B data. Enter flight numbers or callsigns.</div>
-<div class="rt-table-wrap">
-<table class="rt-table" id="flight-table" style="display:none">
-<thead><tr><th>Callsign</th><th>Source</th><th>Status</th><th>Departure</th><th>Destination</th><th>Details</th><th>Last Check</th><th></th></tr></thead>
-<tbody id="flight-tbody"></tbody>
-</table>
-<div class="rt-empty-row" id="flight-empty">No flights tracked yet.</div>
-</div>
-</div>
-
-<!-- Service Monitor -->
-<div class="rt-section">
-<div class="rt-sec-head">
-<div class="rt-sec-title"><span>&#x1f310;</span><span class="label-caps">Service Monitor</span><span class="rt-count" id="svc-count">0</span></div>
-<div class="rt-sec-actions">
-<button onclick="checkAllSvcs()">&#x27f3; Check All</button>
-<button onclick="openAddSvc()">+ Add Endpoint</button>
-</div>
-</div>
-<div class="rt-sec-desc">Monitor public network endpoints. Check reachability and response status of services.</div>
-<div class="rt-table-wrap">
-<table class="rt-table" id="svc-table" style="display:none">
-<thead><tr><th>Name</th><th>Endpoint</th><th>Method</th><th>Status</th><th>Latency</th><th>Last Check</th><th></th></tr></thead>
-<tbody id="svc-tbody"></tbody>
-</table>
-<div class="rt-empty-row" id="svc-empty">No endpoints monitored yet.</div>
-</div>
-</div>
-
-<!-- Activity Log -->
-<div class="rt-section">
-<div class="rt-sec-head">
-<div class="rt-sec-title"><span>&#x1f4dc;</span><span class="label-caps">Activity Log</span></div>
-<button onclick="clearRtLog()">Clear</button>
-</div>
-<div class="rt-log" id="rt-log">
-<div class="rt-log-entry rt-log-sys">RTMonitor initialized &mdash; add sources to begin.</div>
-</div>
-</div>
-
-</div>
-</div>
 
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 <!-- SHARED OVERLAYS                                                    -->
@@ -203,95 +67,6 @@
 <div class="dp panel"><button class="dc btn-ghost" onclick="cdrill()">&times;</button><div id="drc"></div></div>
 </div>
 
-<!-- Add Camera Modal -->
-<div class="ov backdrop" id="cam-modal" onclick="closeModal('cam-modal',event)">
-<div class="dp panel modal-sm">
-<button class="dc btn-ghost" onclick="closeModal('cam-modal')">&times;</button>
-<h2>Add Camera Feed</h2>
-<div class="modal-body">
-<div class="sg"><label>Name</label><input type="text" id="cam-name" placeholder="e.g. I-95 Southbound Cam"></div>
-<div class="sg"><label>Feed URL</label><input type="text" id="cam-url" placeholder="https://dot.state.xx.us/camera/feed.jpg"></div>
-<div class="sg"><label>Type</label>
-<select id="cam-type">
-<option value="image">Still Image (auto-refresh)</option>
-<option value="mjpeg">MJPEG Stream</option>
-<option value="iframe">Embed (iframe)</option>
-</select>
-</div>
-<div class="pg">
-<div class="sg"><label>Refresh (sec)</label><input type="number" id="cam-refresh" value="10" min="2" max="300"></div>
-<div class="sg"><label>Category</label>
-<select id="cam-cat">
-<option value="traffic">Traffic</option>
-<option value="weather">Weather</option>
-<option value="public">Public Webcam</option>
-<option value="other">Other</option>
-</select>
-</div>
-</div>
-<button class="pri" onclick="addCam()" style="width:100%;margin-top:10px">Add Feed</button>
-</div>
-</div>
-</div>
-
-<!-- Add Flight Modal -->
-<div class="ov backdrop" id="flight-modal" onclick="closeModal('flight-modal',event)">
-<div class="dp panel modal-sm">
-<button class="dc btn-ghost" onclick="closeModal('flight-modal')">&times;</button>
-<h2>Track Flight</h2>
-<div class="modal-body">
-<div class="sg"><label>Flight Number / Callsign</label><input type="text" id="flight-id" placeholder="e.g. UAL123, N12345"></div>
-<div class="sg"><label>Data Source</label>
-<select id="flight-src">
-<option value="adsb">ADS-B Exchange (public)</option>
-<option value="opensky">OpenSky Network</option>
-<option value="manual">Manual Entry</option>
-</select>
-</div>
-<div class="sg"><label>Notes</label><input type="text" id="flight-notes" placeholder="Optional"></div>
-<button class="pri" onclick="addFlight()" style="width:100%;margin-top:10px">Track Flight</button>
-</div>
-</div>
-</div>
-
-<!-- Add Service Modal -->
-<div class="ov backdrop" id="svc-modal" onclick="closeModal('svc-modal',event)">
-<div class="dp panel modal-sm">
-<button class="dc btn-ghost" onclick="closeModal('svc-modal')">&times;</button>
-<h2>Add Endpoint</h2>
-<div class="modal-body">
-<div class="sg"><label>Name</label><input type="text" id="svc-name" placeholder="e.g. My Public API"></div>
-<div class="sg"><label>URL / Host</label><input type="text" id="svc-url" placeholder="https://example.com or 1.2.3.4:8080"></div>
-<div class="pg">
-<div class="sg"><label>Method</label>
-<select id="svc-method">
-<option value="http">HTTP GET</option>
-<option value="ping">Ping (ICMP)</option>
-<option value="tcp">TCP Connect</option>
-</select>
-</div>
-<div class="sg"><label>Interval (sec)</label><input type="number" id="svc-interval" value="60" min="10" max="3600"></div>
-</div>
-<button class="pri" onclick="addSvc()" style="width:100%;margin-top:10px">Add Endpoint</button>
-</div>
-</div>
-</div>
-
-
-<!-- Flight Detail Modal -->
-<div class="ov backdrop" id="flight-detail-modal" onclick="closeModal('flight-detail-modal',event)">
-<div class="dp panel" style="max-width:520px;width:95%">
-<button class="dc btn-ghost" onclick="closeModal('flight-detail-modal')">&times;</button>
-<h2 id="fdm-title">Flight Details</h2>
-<div class="modal-body" id="fdm-body" style="font-size:13px;line-height:1.8">
-</div>
-<div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
-<button class="pri" id="fdm-refresh" style="flex:1">&#x27f3; Refresh</button>
-<a id="fdm-track-link" href="#" target="_blank" rel="noopener" class="pri" style="flex:1;text-align:center;text-decoration:none;padding:6px 12px;border-radius:4px;background:var(--p2);color:#fff;font-size:12px">&#x1f517; Track on FlightAware</a>
-<a id="fdm-opensky-link" href="#" target="_blank" rel="noopener" style="flex:1;text-align:center;text-decoration:none;padding:6px 12px;border-radius:4px;border:1px solid var(--bd);color:var(--tx);font-size:12px">OpenSky Explorer</a>
-</div>
-</div>
-</div>
 
 <div class="sp-overlay backdrop" id="spo" onclick="closeSP()"></div>
 
