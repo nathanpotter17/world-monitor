@@ -1401,7 +1401,7 @@ fn main() {
     let (mut cfg, categories, feeds, model_defs) = load_config();
     let discovered_models = discover_models(&cfg.models_dir, &model_defs, &cfg);
 
-    eprintln!("\n  WORLD MONITOR  (TOML config)");
+    eprintln!("\n  NEWS MONITOR  (TOML config)");
     eprintln!("  {} categories | {} feeds | {} models in {}/",
         categories.len(),
         feeds.iter().filter(|f| f.enabled).count(),

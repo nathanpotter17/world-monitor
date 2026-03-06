@@ -1,6 +1,6 @@
 /**
  * @file script.js
- * @description World Monitor — client-side dashboard controller.
+ * @description News Monitor — client-side dashboard controller.
  *
  * Handles NewsMonitor (RSS + AI), model management, budget tracking,
  * and drill-down analysis.
