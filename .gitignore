@@ -2,4 +2,3 @@ monitor.conf
 Cargo.lock
 target/
 *.gguf
-*.toml

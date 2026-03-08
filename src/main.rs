@@ -1380,6 +1380,64 @@ fn jobj(t: &str) -> String {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// LIVE SEARCH HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Percent-encode a string for use in a URL query parameter.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() * 3);
+    for c in s.chars() {
+        match c {
+            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => out.push(c),
+            ' ' => out.push('+'),
+            _ => {
+                for byte in c.to_string().as_bytes() {
+                    out.push_str(&format!("%{byte:02X}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Fetch up to `max_items` headlines from Google News RSS for `query`.
+/// Returns (formatted text block, number of items fetched).
+fn fetch_fresh_news(query: &str, timeout: u64, max_items: usize) -> (String, usize) {
+    let encoded = url_encode(query);
+    let url = format!(
+        "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en",
+        encoded
+    );
+    eprintln!("[live-search] query={:?}", query);
+
+    let feed = FeedDef {
+        name: "Live Search".into(),
+        url,
+        category: "Search".into(),
+        enabled: true,
+        timeout: Some(timeout.min(10)),
+    };
+
+    let (items, msg) = fetch_one(&feed, timeout.min(10));
+    eprintln!("[live-search] {}", msg);
+
+    if items.is_empty() {
+        return (String::new(), 0);
+    }
+
+    let n = items.len().min(max_items);
+    let mut block = String::new();
+    for (i, item) in items.iter().take(n).enumerate() {
+        block.push_str(&format!("{}. [{}] {}", i + 1, item.source, item.title));
+        if !item.desc.is_empty() {
+            block.push_str(&format!(" — {}", trunc(&item.desc, 120)));
+        }
+        block.push('\n');
+    }
+    (block, n)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // STATE + SERVER
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1401,7 +1459,7 @@ fn main() {
     let (mut cfg, categories, feeds, model_defs) = load_config();
     let discovered_models = discover_models(&cfg.models_dir, &model_defs, &cfg);
 
-    eprintln!("\n  NEWS MONITOR  (TOML config)");
+    eprintln!("\n  WORLD MONITOR  (TOML config)");
     eprintln!("  {} categories | {} feeds | {} models in {}/",
         categories.len(),
         feeds.iter().filter(|f| f.enabled).count(),
@@ -1583,7 +1641,7 @@ fn do_scan(st: &Shared) -> String {
 
     let (items, diag) = fetch_all(&enabled_feeds, cfg.timeout);
     let total = items.len();
-    let ok = diag.iter().filter(|(_, m)| m.contains("items") && !m.contains("0 items")).count();
+    let ok = diag.iter().filter(|(_, m)| m.contains("items") && !m.contains(" 0 items")).count();
     eprintln!("[scan] {} items from {}/{} feeds", total, ok, enabled_feeds.len());
 
     let mut j = String::from(r#"{"headlines":["#);
@@ -1593,7 +1651,6 @@ fn do_scan(st: &Shared) -> String {
         let ci_items: Vec<&Item> = items
             .iter()
             .filter(|i| i.category == cat.name)
-            .take(cfg.per_category)
             .collect();
 
         if ci_items.is_empty() {
@@ -1606,9 +1663,10 @@ fn do_scan(st: &Shared) -> String {
         first = false;
 
         j.push_str(&format!(
-            r#"{{"category":"{}","icon":"{}","items":["#,
+            r#"{{"category":"{}","icon":"{}","per_category":{},"items":["#,
             jval(&cat.name),
-            jval(&cat.icon)
+            jval(&cat.icon),
+            cfg.per_category
         ));
 
         for (ii, it) in ci_items.iter().enumerate() {
@@ -1679,12 +1737,15 @@ fn do_drill(st: &Shared, body: &str) -> String {
 }
 
 /// Separate endpoint for AI summary — called on-demand from the drill overlay.
-/// Accepts optional "context" field for threaded follow-up analysis.
+/// Accepts optional "context", "question", and "search_query" fields.
+/// When search_query is provided, live Google News RSS results are fetched
+/// via curl and injected into the prompt before the AI call.
 fn do_drill_ai(st: &Shared, body: &str) -> String {
-    let topic = jget(body, "topic").unwrap_or_default();
-    let text = jget(body, "text").unwrap_or_default();
-    let context = jget(body, "context").unwrap_or_default();
-    let question = jget(body, "question").unwrap_or_default();
+    let topic        = jget(body, "topic").unwrap_or_default();
+    let text         = jget(body, "text").unwrap_or_default();
+    let context      = jget(body, "context").unwrap_or_default();
+    let question     = jget(body, "question").unwrap_or_default();
+    let search_query = jget(body, "search_query").unwrap_or_default();
 
     let (cfg, can_ai, ready) = {
         let s = st.lock().unwrap();
@@ -1703,6 +1764,26 @@ fn do_drill_ai(st: &Shared, body: &str) -> String {
     }
 
     let max_chars = ((cfg.active_ctx as usize).saturating_sub(1500)) * 4;
+
+    // ── Live search injection ────────────────────────────────────────────────
+    // Fetch up to 6 fresh headlines from Google News RSS when a search_query
+    // is provided. This runs synchronously (same curl binary) before the AI
+    // call so the model always gets grounded, current context.
+    let (fresh_news_text, fresh_count) = if !search_query.is_empty() {
+        fetch_fresh_news(&search_query, cfg.timeout, 6)
+    } else {
+        (String::new(), 0)
+    };
+
+    let fresh_section = if !fresh_news_text.is_empty() {
+        format!(
+            "\n\nLive search results for \"{search_query}\" (fetched now, use these as current context):\n{fresh_news_text}"
+        )
+    } else {
+        String::new()
+    };
+    // ────────────────────────────────────────────────────────────────────────
+
     let ctx_section = if context.is_empty() {
         String::new()
     } else {
@@ -1710,24 +1791,26 @@ fn do_drill_ai(st: &Shared, body: &str) -> String {
     };
 
     let prompt = if !question.is_empty() {
-        // Follow-up question about an article
+        // Follow-up question — inject fresh news + article text
         let text_section = if text.is_empty() { String::new() }
             else { format!("\n\nArticle text:\n{}\n", trunc(&text, max_chars / 2)) };
         format!(
-            "Topic: \"{topic}\"{ctx_section}{text_section}\n\
+            "Topic: \"{topic}\"{ctx_section}{text_section}{fresh_section}\n\
              User follow-up question: {question}\n\n\
-             Answer concisely. Return JSON only:\n\
+             Answer concisely, incorporating any relevant live search results above. Return JSON only:\n\
              {{\"title\":\"short title for your answer\",\"summary\":\"your answer (1-3 paragraphs)\",\"key_points\":[\"...\"],\"related\":[\"topic1\",\"topic2\"]}}"
         )
     } else if text.is_empty() {
+        // No article text — search results are the primary source
         format!(
-            "Provide a concise analysis of this news topic: \"{topic}\".{ctx_section}\n\n\
+            "Provide a concise analysis of this news topic: \"{topic}\".{ctx_section}{fresh_section}\n\n\
              Return JSON only:\n{{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"related\":[\"...\",\"...\"]}}"
         )
     } else {
+        // Full article scrape + optional live supplement
         let text = trunc(&text, max_chars);
         format!(
-            "Summarize this article titled \"{topic}\":{ctx_section}\n\n{text}\n\n\
+            "Summarize this article titled \"{topic}\":{ctx_section}{fresh_section}\n\n{text}\n\n\
              Return JSON only:\n{{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"related\":[\"...\",\"...\"]}}"
         )
     };
@@ -1736,10 +1819,11 @@ fn do_drill_ai(st: &Shared, body: &str) -> String {
         Ok(r) => {
             st.lock().unwrap().usage.add(r.tokens);
             format!(
-                r#"{{"ai":{},"tokens":{},"elapsed_ms":{}}}"#,
+                r#"{{"ai":{},"tokens":{},"elapsed_ms":{},"news_fetched":{}}}"#,
                 jobj(&r.text),
                 r.tokens,
-                r.elapsed_ms
+                r.elapsed_ms,
+                fresh_count
             )
         }
         Err(e) => {
@@ -1776,8 +1860,32 @@ fn do_ask(st: &Shared, body: &str) -> String {
         return format!(r#"{{"answer":"{}","tokens":0}}"#, jval(why));
     }
 
+    // If items are empty the auto-scan hasn't completed yet (or failed).
+    // Run a blocking scan now so the question can be answered immediately.
+    let items = if items.is_empty() {
+        eprintln!("[ask] items empty — running auto-scan before answering");
+        let (feeds, categories_for_scan) = {
+            let s = st.lock().unwrap();
+            (s.feeds.clone(), s.categories.clone())
+        };
+        let enabled: Vec<FeedDef> = feeds.into_iter().filter(|f| f.enabled).collect();
+        let (fetched, diag) = fetch_all(&enabled, cfg.timeout);
+        let n = fetched.len();
+        {
+            let mut s = st.lock().unwrap();
+            s.items = fetched.clone();
+            s.diag = diag;
+            s.usage.last_scan = Some(now_ts());
+            s.usage.n_items = n;
+            s.usage.n_feeds = enabled.len();
+        }
+        fetched
+    } else {
+        items
+    };
+
     if items.is_empty() {
-        return r#"{"answer":"No feeds loaded. Click Scan first.","tokens":0}"#.into();
+        return r#"{"answer":"Could not load feeds — check your network and feed URLs in config.toml.","tokens":0}"#.into();
     }
 
     let cat_filt = jget(body, "category").unwrap_or_default();

@@ -1,3 +1,9 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   WORLD MONITOR — style.css
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Design Tokens ──────────────────────────────────────────────────────── */
+
 :root {
   /* Surfaces */
   --bg:  #0a0f14;
@@ -281,10 +287,26 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   padding: 6px 0;
   border-bottom: 1px solid var(--bd);
   margin-bottom: 4px;
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s;
+  border-radius: 4px;
+  padding: 6px 8px;
 }
+.ch:hover { background: var(--sf2); }
 .ci { font-size: 16px; }
 .ct { font-size: 12px; font-weight: 600; color: var(--tx2); }
+.csrc { font-size: 10px; color: var(--tx2); opacity: .6; }
 .cc { font-size: 10px; color: var(--tx2); margin-left: auto; }
+.cexp { font-size: 10px; color: var(--tx2); margin-left: 4px; }
+
+/* Expanded category */
+.cat-expanded { }
+.cat-expanded .ch {
+  background: var(--sf2);
+  border-bottom-color: var(--ac);
+}
+.cat-expanded .ct { color: var(--ac); }
 
 .it {
   padding: 8px 10px;
@@ -572,6 +594,19 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 .drill-entry-related {
   margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px;
+}
+
+/* Live search badge — shown when fresh RSS results were injected */
+.drill-live-tag {
+  font-size: 10px;
+  color: var(--cy);
+  background: var(--st-cy-bg);
+  border: 1px solid var(--st-cy-bd);
+  padding: 1px 7px;
+  border-radius: 10px;
+  margin-left: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Follow-up input bar at bottom of drill modal */

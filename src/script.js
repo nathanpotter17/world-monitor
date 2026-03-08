@@ -1,6 +1,6 @@
 /**
  * @file script.js
- * @description News Monitor — client-side dashboard controller.
+ * @description World Monitor — client-side dashboard controller.
  *
  * Handles NewsMonitor (RSS + AI), model management, budget tracking,
  * and drill-down analysis.
@@ -400,7 +400,7 @@ async function loadDiag() {
     $("diag").innerHTML = data.length
       ? data
           .map((f) => {
-            const ok = f.status.includes("items") && !f.status.includes("0 items");
+            const ok = f.status.includes("items") && !f.status.includes(" 0 items");
             return (
               '<div class="diag-row">' +
               '<span class="diag-name">' + E(f.feed) + "</span>" +
@@ -426,6 +426,7 @@ async function scan() {
   btn.innerHTML = "&#x27f3; ...";
   container.innerHTML = LOADING_HTML + "<p>Fetching feeds...</p>";
   $("em").style.display = "none";
+  _expandedCategory = null;
 
   try {
     const data = await (await fetch("/api/scan", { method: "POST" })).json();
@@ -449,28 +450,106 @@ async function scan() {
   }
 }
 
+/** Select items diversified by source (round-robin across unique sources) */
+function diversifyBySource(items, maxItems) {
+  const bySource = {};
+  const sourceOrder = [];
+  items.forEach(function(item) {
+    if (!bySource[item.source]) {
+      bySource[item.source] = [];
+      sourceOrder.push(item.source);
+    }
+    bySource[item.source].push(item);
+  });
+
+  const result = [];
+  let round = 0;
+  while (result.length < maxItems) {
+    let added = false;
+    for (let si = 0; si < sourceOrder.length && result.length < maxItems; si++) {
+      const src = sourceOrder[si];
+      if (round < bySource[src].length) {
+        result.push(bySource[src][round]);
+        added = true;
+      }
+    }
+    if (!added) break;
+    round++;
+  }
+  return result;
+}
+
+/** Currently expanded category (null = default diversified view) */
+let _expandedCategory = null;
+let _allCategoriesData = [];
+let _lastScanMeta = { okFeeds: 0, totalFeeds: 0, total: 0 };
+
 function renderHeadlines(categories, total, okFeeds, totalFeeds) {
+  _allCategoriesData = categories;
+  if (total !== undefined) _lastScanMeta = { okFeeds, totalFeeds, total };
+  const meta = _lastScanMeta;
+
   const metaHtml =
     '<div class="meta"><span>' +
-    okFeeds + "/" + totalFeeds + " feeds &middot; " + total + " headlines" +
+    meta.okFeeds + "/" + meta.totalFeeds + " feeds &middot; " + meta.total + " headlines" +
     "</span><span>" + new Date().toLocaleTimeString() + "</span></div>";
 
   const catsHtml = categories
-    .map(
-      (cat) =>
-        '<div class="cat">' +
-        '<div class="ch">' +
+    .map(function(cat) {
+      const perCat = cat.per_category || 5;
+      const isExpanded = _expandedCategory === cat.category;
+      const displayItems = isExpanded
+        ? cat.items
+        : diversifyBySource(cat.items, perCat);
+
+      // Count unique sources
+      const uniqueSources = [...new Set(cat.items.map(function(i) { return i.source; }))];
+      const sourceCountLabel = uniqueSources.length + " source" + (uniqueSources.length !== 1 ? "s" : "");
+
+      return (
+        '<div class="cat' + (isExpanded ? ' cat-expanded' : '') + '">' +
+        '<div class="ch" data-category="' + A(cat.category) + '">' +
         '<span class="ci">' + cat.icon + "</span>" +
         '<span class="ct label-caps">' + E(cat.category) + "</span>" +
-        '<span class="cc">' + cat.items.length + "</span>" +
+        '<span class="csrc">' + sourceCountLabel + '</span>' +
+        '<span class="cc">' + displayItems.length +
+          (isExpanded ? '' : '/' + cat.items.length) + "</span>" +
+        '<span class="cexp">' + (isExpanded ? '\u25b4' : '\u25be') + '</span>' +
         "</div>" +
-        cat.items.map((i) => renderItem(i, cat.category)).join("") +
+        displayItems.map(function(i) { return renderItem(i, cat.category); }).join("") +
+        (isExpanded && cat.items.length > 10
+          ? '<div class="cat-fade"></div>'
+          : '') +
         "</div>"
-    )
+      );
+    })
     .join("");
 
   return metaHtml + catsHtml;
 }
+
+// Click handler for category headers — toggles expanded view
+document.addEventListener("click", function(e) {
+  const ch = e.target.closest(".ch[data-category]");
+  if (!ch) return;
+
+  const cat = ch.dataset.category;
+  if (_expandedCategory === cat) {
+    _expandedCategory = null; // collapse
+  } else {
+    _expandedCategory = cat; // expand this one
+  }
+
+  // Re-render from cached data
+  const container = $("hl");
+  container.innerHTML = renderHeadlines(_allCategoriesData);
+
+  // Scroll expanded category into view
+  if (_expandedCategory) {
+    const expanded = container.querySelector('.cat-expanded');
+    if (expanded) expanded.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+});
 
 function renderItem(item, category) {
   const dotColor = CATEGORY_COLORS[category] || "var(--ac)";
@@ -720,7 +799,12 @@ async function drillAI(topic, question) {
 
   try {
     const payload = { topic, text: _drillText, context };
-    if (question) payload.question = question;
+    if (question) {
+      payload.question = question;
+      payload.search_query = question;      // live-search for the follow-up question
+    } else if (!_drillText) {
+      payload.search_query = topic;         // no scraped article — search for the topic instead
+    }
 
     const data = await (
       await fetch("/api/drill/ai", {
@@ -759,12 +843,16 @@ async function drillAI(topic, question) {
 
     // Render the completed entry
     el.className = "drill-entry";
+    const liveTag = data.news_fetched
+      ? ' <span class="drill-live-tag">\ud83d\udd0d ' + data.news_fetched + ' live</span>'
+      : '';
     let html = '<div class="drill-entry-head">' +
       '<span class="drill-entry-icon">\ud83e\udde0</span>' +
       '<span class="drill-entry-topic">' + E(ai.title || topic) + '</span>' +
       '<span class="drill-entry-meta">' +
       (data.tokens ? data.tokens.toLocaleString() + ' tok' : '') +
       (data.elapsed_ms ? ' \u00b7 ' + fmtMs(data.elapsed_ms) : '') +
+      liveTag +
       '</span></div>';
 
     if (question) {

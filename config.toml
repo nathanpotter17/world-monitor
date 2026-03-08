@@ -1,0 +1,278 @@
+# WORLD MONITOR CONFIG
+
+# ───────────────────────────────────────────────────────────────────────────────
+# SERVER & CONFIG SETTINGS
+# ───────────────────────────────────────────────────────────────────────────────
+[server]
+# Port for the web interface
+port = 8080
+
+# Request timeout for feed fetching (seconds)
+timeout = 15
+
+# Maximum items to display per category
+per_category = 5
+
+# ───────────────────────────────────────────────────────────────────────────────
+# LLAMA SERVER SETTINGS
+# ───────────────────────────────────────────────────────────────────────────────
+[llama]
+# Path to llama-server binary (auto-detected if empty)
+# Examples: "./llama-server", "/usr/local/bin/llama-server", "models/llama-server"
+binary = ""
+
+# Port for the llama-server API (internal, not exposed)
+port = 8079
+
+# Number of parallel inference slots
+parallel_slots = 1
+
+# Startup timeout in seconds (large models need more time)
+startup_timeout = 120
+
+# ───────────────────────────────────────────────────────────────────────────────
+# BUDGET / RATE LIMITS
+# ───────────────────────────────────────────────────────────────────────────────
+[limits]
+# Maximum tokens per session (0 = unlimited)
+session_tokens = 0
+
+# Maximum tokens per day (0 = unlimited)
+daily_tokens = 0
+
+# ───────────────────────────────────────────────────────────────────────────────
+# DEFAULT MODEL SETTINGS
+# ───────────────────────────────────────────────────────────────────────────────
+# These are used when a model isn't in the [[models]] list below,
+# or as fallbacks when model-specific values aren't set.
+
+[defaults]
+# Model to load at startup (filename in models_dir, empty = first available)
+model = ""
+
+# Directory containing .gguf model files
+models_dir = "models"
+
+# GPU layers to offload (-1 or 99 = all layers)
+gpu_layers = -1
+
+# Context window size in tokens
+context_size = 4096
+
+# Enable flash attention
+flash_attention = true
+
+temperature = 0.7
+top_k = 40
+top_p = 0.9
+repeat_penalty = 1.1
+
+# ───────────────────────────────────────────────────────────────────────────────
+# CATEGORIES
+# ───────────────────────────────────────────────────────────────────────────────
+# Define display order and icons for feed categories.
+# Feeds reference these by name.
+
+[[categories]]
+name = "Geopolitics"
+icon = "🌍"
+color = "#4a9eff"
+
+[[categories]]
+name = "Tech & AI"
+icon = "🤖"
+color = "#a78bfa"
+
+[[categories]]
+name = "Markets"
+icon = "📈"
+color = "#34d399"
+
+[[categories]]
+name = "Science"
+icon = "🔬"
+color = "#fbbf24"
+
+[[categories]]
+name = "Security"
+icon = "🔒"
+color = "#f87171"
+
+[[categories]]
+name = "Society"
+icon = "🏛"
+color = "#fb923c"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FEEDS
+# ───────────────────────────────────────────────────────────────────────────────
+# RSS/Atom feeds to monitor. Set enabled = false to skip a feed.
+
+# ─── Geopolitics ───
+[[feeds]]
+name = "BBC World"
+url = "https://feeds.bbci.co.uk/news/world/rss.xml"
+category = "Geopolitics"
+enabled = true
+
+[[feeds]]
+name = "Al Jazeera"
+url = "https://www.aljazeera.com/xml/rss/all.xml"
+category = "Geopolitics"
+enabled = true
+
+[[feeds]]
+name = "NPR News"
+url = "https://feeds.npr.org/1001/rss.xml"
+category = "Geopolitics"
+enabled = true
+
+[[feeds]]
+name = "The Guardian"
+url = "https://www.theguardian.com/world/rss"
+category = "Geopolitics"
+enabled = true
+
+[[feeds]]
+name = "RFI English"
+url = "https://www.rfi.fr/en/rss"
+category = "Geopolitics"
+enabled = true
+
+# ─── Tech & AI ───
+[[feeds]]
+name = "Ars Technica"
+url = "https://feeds.arstechnica.com/arstechnica/index"
+category = "Tech & AI"
+enabled = true
+
+[[feeds]]
+name = "Hacker News"
+url = "https://hnrss.org/frontpage"
+category = "Tech & AI"
+enabled = true
+
+[[feeds]]
+name = "The Verge"
+url = "https://www.theverge.com/rss/index.xml"
+category = "Tech & AI"
+enabled = true
+
+[[feeds]]
+name = "EFF"
+url = "https://www.eff.org/rss/updates.xml"
+category = "Tech & AI"
+enabled = true
+
+[[feeds]]
+name = "TechCrunch"
+url = "https://techcrunch.com/feed/"
+category = "Tech & AI"
+enabled = true
+
+# ─── Markets ───
+[[feeds]]
+name = "CNBC Economy"
+url = "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=20910258"
+category = "Markets"
+enabled = true
+
+[[feeds]]
+name = "MarketWatch"
+url = "https://feeds.marketwatch.com/marketwatch/topstories/"
+category = "Markets"
+enabled = true
+
+# ─── Science ───
+[[feeds]]
+name = "Nature"
+url = "https://www.nature.com/nature.rss"
+category = "Science"
+enabled = true
+
+[[feeds]]
+name = "NASA"
+url = "https://www.nasa.gov/news-release/feed/"
+category = "Science"
+enabled = true
+
+[[feeds]]
+name = "Phys.org"
+url = "https://phys.org/rss-feed/"
+category = "Science"
+enabled = true
+
+[[feeds]]
+name = "Science Daily"
+url = "https://www.sciencedaily.com/rss/all.xml"
+category = "Science"
+enabled = true
+
+# ─── Security ───
+[[feeds]]
+name = "Krebs on Security"
+url = "https://krebsonsecurity.com/feed/"
+category = "Security"
+enabled = true
+
+[[feeds]]
+name = "Schneier on Security"
+url = "https://www.schneier.com/feed/"
+category = "Security"
+enabled = true
+
+[[feeds]]
+name = "Bellingcat"
+url = "https://www.bellingcat.com/feed/"
+category = "Security"
+enabled = true
+
+[[feeds]]
+name = "Bleeping Computer"
+url = "https://www.bleepingcomputer.com/feed/"
+category = "Security"
+enabled = true
+
+# ─── Society ───
+[[feeds]]
+name = "ProPublica"
+url = "https://feeds.propublica.org/propublica/main"
+category = "Society"
+enabled = true
+
+[[feeds]]
+name = "France24"
+url = "https://www.france24.com/en/rss"
+category = "Society"
+enabled = true
+
+# ───────────────────────────────────────────────────────────────────────────────
+# MODELS
+# ───────────────────────────────────────────────────────────────────────────────
+# Known .gguf models with tuned parameters.
+# Models not listed here will use [defaults] values.
+# The 'filename' must match the file in models_dir exactly.
+
+[[models]]
+filename = "Qwen2.5-7B-Instruct-Q4_K_M.gguf"
+name = "Qwen2.5 7B Instruct"
+family = "qwen"
+gpu_layers = 33
+context_size = 8192
+flash_attention = true
+temperature = 0.7
+top_k = 40
+top_p = 0.9
+repeat_penalty = 1.1
+
+[[models]]
+filename = "google_gemma-3-1b-it-Q4_K_M.gguf"
+name = "Gemma 3 1B IT"
+family = "gemma"
+gpu_layers = 25
+context_size = 1024
+flash_attention = true
+temperature = 0.7
+top_k = 40
+top_p = 0.95
+repeat_penalty = 1.1
