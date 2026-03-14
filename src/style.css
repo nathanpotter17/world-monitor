@@ -252,7 +252,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   align-items: center;
 }
 
-.ai-text  { font-size: 13px; line-height: 1.7; max-height: 50vh; overflow-y: auto; }
+.ai-text  { font-size: 13px; line-height: 1.7; max-height: 60vh; overflow-y: auto; }
 .ai-meta  { font-size: 10px; color: var(--tx2); margin-top: 8px; }
 .ai-close { font-size: 14px; padding: 0 4px; }
 
@@ -512,7 +512,7 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 .toast.v { opacity: 1; }
 
 
-/* ── Drill-Down: Threaded AI Conversation ───────────────────────────── */
+/* ── Drill-Down: Fortune Teller Depth Stack ──────────────────────────── */
 
 .drill-header { margin-bottom: 12px; }
 .drill-header h2 { font-size: 16px; margin-bottom: 4px; padding-right: 30px; }
@@ -540,21 +540,65 @@ button:disabled { opacity: .4; cursor: not-allowed; }
 }
 .drill-err { color: var(--rd); font-size: 13px; padding: 10px 0; }
 
-/* Thread entries */
+/* Depth number badge */
+.drill-depth-num {
+  font-size: 10px;
+  color: var(--tx2);
+  background: var(--sf2);
+  padding: 1px 7px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  font-weight: 600;
+  min-width: 20px;
+  text-align: center;
+}
+.drill-depth-num.err { background: var(--st-rd-bg); color: var(--rd); }
+
+/* Collapsed depth level */
+.drill-collapsed {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--sf);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  opacity: .65;
+  transition: opacity .15s, background .15s;
+}
+.drill-collapsed:hover { opacity: 1; background: var(--sf2); }
+.drill-collapsed-text {
+  font-size: 12px;
+  color: var(--tx2);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.drill-collapsed-back {
+  font-size: 10px;
+  color: var(--tx2);
+  flex-shrink: 0;
+}
+
+/* Current depth entry */
 .drill-entry {
-  border-left: 3px solid var(--pr);
   background: var(--bg);
-  border-radius: 0 6px 6px 0;
+  border: 1px solid var(--bd);
+  border-radius: 6px;
   padding: 12px 14px;
   margin-bottom: 10px;
   animation: drillFadeIn .3s ease;
 }
 .drill-entry-loading {
-  border-left-color: var(--tx2);
   opacity: .7;
+  border-color: var(--bd);
 }
 .drill-entry-err {
-  border-left-color: var(--rd);
+  border-color: var(--rd);
 }
 
 @keyframes drillFadeIn {
@@ -569,7 +613,6 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-bottom: 8px;
   flex-wrap: wrap;
 }
-.drill-entry-icon  { font-size: 14px; flex-shrink: 0; }
 .drill-entry-topic {
   font-size: 13px; font-weight: 600; color: var(--tx);
   flex: 1; min-width: 0;
@@ -596,7 +639,28 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px;
 }
 
-/* Live search badge — shown when fresh RSS results were injected */
+/* Source pills */
+.drill-source-pills {
+  margin-top: 10px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.drill-source-pill {
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--sf2);
+  border-radius: 10px;
+  color: var(--tx2);
+  border: 1px solid var(--bd);
+}
+.drill-source-pill.live {
+  color: var(--cy);
+  border-color: var(--st-cy-bd);
+  background: var(--st-cy-bg);
+}
+
+/* Live search badge */
 .drill-live-tag {
   font-size: 10px;
   color: var(--cy);
@@ -604,9 +668,78 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   border: 1px solid var(--st-cy-bd);
   padding: 1px 7px;
   border-radius: 10px;
-  margin-left: 6px;
   white-space: nowrap;
   flex-shrink: 0;
+}
+.drill-live-clickable {
+  cursor: pointer;
+  transition: background .15s;
+}
+.drill-live-clickable:hover {
+  background: rgba(34,211,238,.15);
+}
+
+/* ── Path Cards (Fortune Teller branches) ────────────────────────────── */
+
+.drill-paths { margin-top: 2px; animation: drillFadeIn .3s ease; }
+
+.drill-paths-divider, .ask-paths-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.drill-paths-line, .ask-paths-line {
+  flex: 1;
+  height: 1px;
+  background: var(--bd);
+}
+.drill-paths-label, .ask-paths-label {
+  font-size: 10px;
+  color: var(--tx2);
+  letter-spacing: .05em;
+  white-space: nowrap;
+}
+
+.drill-path-card, .ask-path-card {
+  background: var(--sf);
+  border: 1px solid var(--bd);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  transition: border-color .15s, background .12s;
+}
+.drill-path-card:hover, .ask-path-card:hover {
+  border-color: var(--ac);
+  background: var(--sf2);
+}
+.drill-path-card:active, .ask-path-card:active {
+  transform: scale(0.995);
+}
+
+.drill-path-inner, .ask-path-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.drill-path-q, .ask-path-q {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--tx);
+}
+.drill-path-hint, .ask-path-hint {
+  font-size: 11px;
+  color: var(--tx2);
+  margin-top: 2px;
+}
+.drill-path-arrow, .ask-path-arrow {
+  font-size: 18px;
+  color: var(--tx2);
+  flex-shrink: 0;
+  line-height: 1;
 }
 
 /* Follow-up input bar at bottom of drill modal */
@@ -629,7 +762,68 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   flex-shrink: 0;
 }
 
-/* ── Ask Panel: Conversation Thread ────────────────────────────────── */
+/* ── Sources Modal ───────────────────────────────────────────────────── */
+
+#src-ov {
+  background: rgba(0, 0, 0, .6);
+  align-items: center;
+  justify-content: center;
+}
+
+.src-modal {
+  border-radius: 10px;
+  width: min(500px, 90vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: 20px;
+  position: relative;
+}
+.src-modal .dc {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  font-size: 18px;
+}
+.src-modal-title {
+  font-size: 12px;
+  color: var(--cy);
+  margin-bottom: 14px;
+}
+.src-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--bd);
+}
+.src-item:last-child { border-bottom: none; }
+.src-item-source {
+  font-size: 10px;
+  color: var(--tx2);
+  background: var(--sf2);
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-bottom: 4px;
+}
+.src-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--tx);
+  margin-bottom: 4px;
+}
+.src-item-link {
+  font-size: 11px;
+  color: var(--ac);
+  text-decoration: none;
+  word-break: break-all;
+}
+.src-item-link:hover { text-decoration: underline; }
+.src-empty {
+  font-size: 13px;
+  color: var(--tx2);
+  text-align: center;
+  padding: 20px;
+}
+
+/* ── Ask Panel: Conversation Thread + Path Cards ─────────────────────── */
 
 .ask-user-msg {
   font-size: 12px; color: var(--ac); margin-bottom: 6px;
@@ -642,8 +836,29 @@ button:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--bg); border-radius: 6px;
   border-left: 3px solid var(--pr);
 }
+.ask-paths {
+  margin-bottom: 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--bd);
+}
 .ask-followup-chips {
   display: flex; flex-wrap: wrap; gap: 5px;
   margin-bottom: 10px; padding-bottom: 8px;
   border-bottom: 1px solid var(--bd);
+}
+
+/* Ask panel follow-up input bar */
+.ask-input-bar {
+  display: flex; gap: 6px; margin-top: 10px; padding-top: 10px;
+  border-top: 1px solid var(--bd);
+}
+.ask-followup-input {
+  flex: 1; padding: 8px 12px; font-size: 13px;
+  background: var(--bg); border: 1px solid var(--bd); border-radius: 6px;
+  color: var(--tx); outline: none;
+}
+.ask-followup-input:focus { border-color: var(--ac); }
+.ask-followup-input::placeholder { color: var(--tx2); }
+.ask-followup-btn {
+  padding: 8px 14px; font-size: 14px; border-radius: 6px;
+  flex-shrink: 0;
 }

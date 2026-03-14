@@ -63,7 +63,7 @@
 <!-- SHARED OVERLAYS                                                    -->
 <!-- ═══════════════════════════════════════════════════════════════════ -->
 
-<div class="ov backdrop" id="ov" onclick="cdrill(event)">
+<div class="ov backdrop" id="ov">
 <div class="dp panel"><button class="dc btn-ghost" onclick="cdrill()">&times;</button><div id="drc"></div></div>
 </div>
 
@@ -158,6 +158,10 @@
 <hr class="sep">
 <h3>Feed Diagnostics</h3>
 <div id="diag" style="font-size:11px">Scan first</div>
+</div>
+
+<div class="ov backdrop" id="src-ov" onclick="closeSources(event)">
+<div class="src-modal panel" onclick="event.stopPropagation()"><button class="dc btn-ghost" onclick="closeSources()">&times;</button><div class="src-modal-title label-caps">&#x1f50d; Live Sources</div><div id="src-list"></div></div>
 </div>
 
 <div class="toast" id="toast"></div>

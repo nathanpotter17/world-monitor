@@ -581,15 +581,22 @@ document.addEventListener("click", function(e) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 let _askHistory = []; // conversation thread for the ask panel
+let _askCategory = null; // last used category filter
 
 function askQ(query, category) {
-  $("qi").value = query;
-  ask(category);
+  // Call ask directly with query — don't put it in the search bar
+  ask(category, query);
 }
 
-async function ask(category) {
-  const query = $("qi").value.trim();
+async function ask(category, directQuery) {
+  // Use directQuery if provided (from chips/path cards), otherwise read from input
+  const query = directQuery || $("qi").value.trim();
   if (!query) { toast("Type a question first"); return; }
+
+  // Clear the search bar only if the user typed in it
+  if (!directQuery) $("qi").value = "";
+
+  _askCategory = category || null;
 
   const panel = $("aip");
   const textEl = $("ait");
@@ -597,7 +604,6 @@ async function ask(category) {
 
   panel.classList.add("open");
 
-  // If we already have history, append as a thread; otherwise start fresh
   if (_askHistory.length === 0) {
     textEl.innerHTML = "";
   }
@@ -615,42 +621,101 @@ async function ask(category) {
   textEl.appendChild(loadDiv);
   metaEl.textContent = "";
 
-  // Scroll to bottom
+  // Remove old ask input bar and path cards (will re-add after response)
+  var oldInput = textEl.querySelector(".ask-input-bar");
+  if (oldInput) oldInput.remove();
+  var oldPaths = textEl.querySelector(".ask-paths:last-of-type");
+
   textEl.scrollTop = textEl.scrollHeight;
 
   try {
     const payload = { query };
     if (category) payload.category = category;
 
-    const data = await (
-      await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      })
-    ).json();
+    const resp = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const raw = await resp.text();
 
-    const answer = data.answer || data.error || "No response";
-    _askHistory.push({ q: query, a: answer });
+    // Try to parse JSON, handle control character issues
+    var data;
+    try {
+      data = JSON.parse(raw);
+    } catch (parseErr) {
+      // Attempt to clean control characters and retry
+      var cleaned = raw.replace(/[\x00-\x1f\x7f]/g, function(c) {
+        if (c === '\n' || c === '\r' || c === '\t') return ' ';
+        return '';
+      });
+      try {
+        data = JSON.parse(cleaned);
+      } catch (_) {
+        throw new Error("JSON parse error: " + parseErr.message);
+      }
+    }
+
+    // Handle response: data.ai.answer + data.ai.follow_ups
+    const ai = data.ai || {};
+    const answer = ai.answer || data.answer || data.error || "No response";
+    var followUps = ai.follow_ups || [];
+    _askHistory.push({ q: query, a: answer, category: category });
 
     loadDiv.textContent = answer;
 
-    // Add follow-up suggestion chips
-    const followUps = generateFollowUps(query, answer, category);
-    if (followUps.length) {
-      const chipDiv = document.createElement("div");
-      chipDiv.className = "ask-followup-chips";
-      followUps.forEach(function(f) {
-        const chip = document.createElement("span");
-        chip.className = "chip";
-        chip.textContent = f;
-        chip.onclick = function() { $("qi").value = f; ask(category); };
-        chipDiv.appendChild(chip);
-      });
-      textEl.appendChild(chipDiv);
+    // Only add fallback follow-ups if the AI call timed out (>180s)
+    var elapsedMs = data.elapsed_ms || 0;
+    if (followUps.length < 2 && elapsedMs > 180000) {
+      var fallbacks = [
+        { question: "What are the broader implications of this?", hint: "Impact analysis" },
+        { question: "Which sources have the most contrasting perspectives?", hint: "Cross-reference feeds" },
+        { question: "How does this connect to other categories?", hint: "Cross-feed analysis" },
+      ];
+      while (followUps.length < 2 && fallbacks.length > 0) {
+        followUps.push(fallbacks.shift());
+      }
     }
 
-    const parts = [];
+    // Render path cards — clicking opens drill overlay for deeper exploration
+    if (followUps.length > 0) {
+      var pathsDiv = document.createElement("div");
+      pathsDiv.className = "ask-paths";
+
+      var divider = document.createElement("div");
+      divider.className = "ask-paths-divider";
+      divider.innerHTML = '<div class="ask-paths-line"></div><span class="ask-paths-label label-caps">Dive deeper</span><div class="ask-paths-line"></div>';
+      pathsDiv.appendChild(divider);
+
+      followUps.forEach(function(f) {
+        var q = typeof f === "string" ? f : (f.question || String(f));
+        var hint = typeof f === "object" ? (f.hint || "") : "";
+        var card = document.createElement("div");
+        card.className = "ask-path-card";
+        card.innerHTML =
+          '<div class="ask-path-inner">' +
+          '<div><div class="ask-path-q">' + E(q) + '</div>' +
+          (hint ? '<div class="ask-path-hint">' + E(hint) + '</div>' : '') +
+          '</div><span class="ask-path-arrow">&#x203A;</span></div>';
+        // Click opens drill overlay for this question
+        card.onclick = function() { openDrillFromAsk(q); };
+        pathsDiv.appendChild(card);
+      });
+
+      textEl.appendChild(pathsDiv);
+    }
+
+    // Add follow-up input bar inside the AI panel
+    var askBar = document.createElement("div");
+    askBar.className = "ask-input-bar";
+    askBar.innerHTML =
+      '<input class="ask-followup-input" id="ask-followup" ' +
+      'placeholder="Ask a follow-up question\u2026" ' +
+      'onkeydown="if(event.key===\'Enter\')askFollowUp()">' +
+      '<button class="pri ask-followup-btn" onclick="askFollowUp()">\u2192</button>';
+    textEl.appendChild(askBar);
+
+    var parts = [];
     if (data.tokens) parts.push(data.tokens.toLocaleString() + " tokens");
     if (data.elapsed_ms) parts.push(fmtMs(data.elapsed_ms));
     metaEl.textContent = parts.join(" \u00b7 ") || "local";
@@ -665,64 +730,62 @@ async function ask(category) {
     loadDiv.style.color = "var(--rd)";
   }
 
-  // Scroll to bottom and clear input
   textEl.scrollTop = textEl.scrollHeight;
-  $("qi").value = "";
-  $("qi").focus();
+
+  // Focus the in-panel input if it exists, otherwise the top bar
+  var inPanelInput = $("ask-followup");
+  if (inPanelInput) inPanelInput.focus();
+  else $("qi").focus();
 }
 
-function generateFollowUps(query, answer, category) {
-  // Generate contextual follow-up suggestions
-  const suggestions = [];
-  const q = query.toLowerCase();
-  if (q.includes("summar")) {
-    suggestions.push("What are the implications?");
-    suggestions.push("Which story is most significant?");
-  } else if (q.includes("market") || q.includes("econ")) {
-    suggestions.push("What sectors are most affected?");
-    suggestions.push("Any contrarian signals?");
-  } else if (q.includes("tech") || q.includes("ai")) {
-    suggestions.push("What are the risks?");
-    suggestions.push("Who benefits most?");
-  } else if (q.includes("geopolit") || q.includes("secur")) {
-    suggestions.push("What should we watch next?");
-    suggestions.push("Historical parallels?");
-  } else {
-    suggestions.push("Tell me more");
-    suggestions.push("What are the implications?");
-  }
-  if (answer.length > 200) {
-    suggestions.push("Summarize in one sentence");
-  }
-  return suggestions.slice(0, 3);
+/** Follow-up typed in the AI panel's own input bar */
+function askFollowUp() {
+  var input = $("ask-followup");
+  if (!input) return;
+  var q = input.value.trim();
+  if (!q) return;
+  input.value = "";
+  ask(_askCategory, q);
+}
+
+/** Open drill overlay from an ask panel path card */
+function openDrillFromAsk(question) {
+  // Close the ask panel, open drill with the question as topic
+  // Pass empty link — drill will use AI + live search
+  drill(question, "");
 }
 
 function closeAI() {
   $("aip").classList.remove("open");
   _askHistory = [];
+  _askCategory = null;
   $("ait").innerHTML = "";
 }
 
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// DRILL-DOWN (NewsMonitor) — threaded conversation with auto-AI
+// DRILL-DOWN — Fortune Teller depth stack
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/** Thread state: array of {topic, link, text, ai, tokens, elapsed_ms, type} */
+/**
+ * Thread state: array of depth entries.
+ * Each: {topic, link, question, ai, tokens, elapsed_ms, news_sources, follow_ups}
+ */
 let _drillThread = [];
-let _drillText = "";    // scraped article text from original drill
+let _drillText = "";       // scraped article text from original drill
 let _drillLink = "";
-let _drillBusy = false; // prevent overlapping AI calls
+let _drillBusy = false;
+let _drillTopic = "";      // original headline topic
 
 async function drill(topic, link) {
   const overlay = $("ov");
   const content = $("drc");
 
-  // Reset thread for a fresh drill
   _drillThread = [];
   _drillText = "";
   _drillLink = link || "";
   _drillBusy = false;
+  _drillTopic = topic;
 
   overlay.classList.add("open");
   content.innerHTML = '<div class="drill-header"><h2>' + E(topic) + '</h2>' +
@@ -731,13 +794,22 @@ async function drill(topic, link) {
     renderDrillInput();
 
   try {
-    const data = await (
-      await fetch("/api/drill", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, link }),
-      })
-    ).json();
+    var drillResp = await fetch("/api/drill", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic, link }),
+    });
+    var drillRaw = await drillResp.text();
+    var data;
+    try {
+      data = JSON.parse(drillRaw);
+    } catch (pe) {
+      var cl = drillRaw.replace(/[\x00-\x1f\x7f]/g, function(c) {
+        if (c === '\n' || c === '\r' || c === '\t') return ' ';
+        return '';
+      });
+      data = JSON.parse(cl);
+    }
 
     if (data.error) {
       $("drill-thread").innerHTML = '<div class="drill-err">' + E(data.error) + '</div>';
@@ -746,7 +818,6 @@ async function drill(topic, link) {
 
     _drillText = data.scraped_text || "";
 
-    // Show scraped content as a collapsed detail if available
     let scrapeHtml = "";
     const info = data.drill || {};
     if (info.detail && data.mode === "page") {
@@ -760,14 +831,27 @@ async function drill(topic, link) {
 
     $("drill-thread").innerHTML = scrapeHtml;
 
-    // Auto-trigger AI analysis
+    // Auto-trigger first AI analysis
     drillAI(topic);
   } catch (err) {
     $("drill-thread").innerHTML = '<div class="drill-err">' + E(err.message) + '</div>';
   }
 }
 
-/** Core AI call — appends a thread entry (used for initial + follow-ups) */
+/** Build accumulated context from all prior depth levels */
+function buildDrillContext() {
+  return _drillThread
+    .map(function(e) {
+      var parts = [];
+      if (e.question) parts.push("Q: " + e.question);
+      if (e.ai && e.ai.title) parts.push("## " + e.ai.title);
+      if (e.ai && e.ai.summary) parts.push(e.ai.summary);
+      return parts.join("\n");
+    })
+    .join("\n\n");
+}
+
+/** Core AI call — creates a new depth entry */
 async function drillAI(topic, question) {
   if (_drillBusy) { toast("AI is already processing\u2026"); return; }
   _drillBusy = true;
@@ -775,112 +859,103 @@ async function drillAI(topic, question) {
   const thread = $("drill-thread");
   if (!thread) { _drillBusy = false; return; }
 
-  // Build context from prior thread entries
-  const context = _drillThread
-    .map(function(e) { return "## " + e.topic + "\n" + (e.summary || ""); })
-    .join("\n\n");
+  const context = buildDrillContext();
+  const depth = _drillThread.length;
 
-  // Add loading entry
-  const entryId = "drill-entry-" + Date.now();
-  const loadEl = document.createElement("div");
-  loadEl.id = entryId;
+  // Disable input
+  var input = $("drill-followup");
+  if (input) input.disabled = true;
+
+  // Show loading in the thread area (we'll replace it with the full re-render)
+  var loadId = "drill-load-" + Date.now();
+  var loadEl = document.createElement("div");
+  loadEl.id = loadId;
   loadEl.className = "drill-entry drill-entry-loading";
   loadEl.innerHTML = '<div class="drill-entry-head">' +
-    '<span class="drill-entry-icon">\ud83e\udde0</span>' +
-    '<span class="drill-entry-topic">' + E(question ? "Follow-up" : topic) + '</span>' +
+    '<span class="drill-depth-num">' + (depth + 1) + '</span>' +
+    '<span class="drill-entry-topic">' + E(question || topic) + '</span>' +
     '<span class="drill-entry-status">\u23f3 Analyzing\u2026</span></div>' +
     LOADING_HTML;
   thread.appendChild(loadEl);
   scrollDrill(loadEl);
 
-  // Disable input while processing
-  const input = $("drill-followup");
-  if (input) input.disabled = true;
-
   try {
-    const payload = { topic, text: _drillText, context };
+    var payload = { topic: _drillTopic, text: _drillText, context: context };
     if (question) {
       payload.question = question;
-      payload.search_query = question;      // live-search for the follow-up question
+      payload.search_query = question;
     } else if (!_drillText) {
-      payload.search_query = topic;         // no scraped article — search for the topic instead
+      payload.search_query = topic;
     }
 
-    const data = await (
-      await fetch("/api/drill/ai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      })
-    ).json();
+    var resp = await fetch("/api/drill/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    var rawText = await resp.text();
 
-    const el = $(entryId);
-    if (!el) { _drillBusy = false; return; }
+    // Resilient JSON parsing — handle control characters from AI
+    var data;
+    try {
+      data = JSON.parse(rawText);
+    } catch (parseErr) {
+      var cleaned = rawText.replace(/[\x00-\x1f\x7f]/g, function(c) {
+        if (c === '\n' || c === '\r' || c === '\t') return ' ';
+        return '';
+      });
+      try {
+        data = JSON.parse(cleaned);
+      } catch (_) {
+        throw new Error("JSON parse error: " + parseErr.message);
+      }
+    }
 
     if (data.error) {
-      el.className = "drill-entry drill-entry-err";
-      el.innerHTML = '<div class="drill-entry-head">' +
-        '<span class="drill-entry-icon">\u26a0\ufe0f</span>' +
-        '<span class="drill-entry-topic">' + E(topic) + '</span></div>' +
-        '<div class="drill-entry-body">' + E(data.error) + '</div>';
+      var el = $(loadId);
+      if (el) {
+        el.className = "drill-entry drill-entry-err";
+        el.innerHTML = '<div class="drill-entry-head">' +
+          '<span class="drill-depth-num err">\u26a0</span>' +
+          '<span class="drill-entry-topic">' + E(topic) + '</span></div>' +
+          '<div class="drill-entry-body">' + E(data.error) + '</div>';
+      }
       _drillBusy = false;
       if (input) input.disabled = false;
       return;
     }
 
-    const ai = data.ai || {};
+    var ai = data.ai || {};
+    var newsSources = data.news_sources || [];
+    var followUps = ai.follow_ups || [];
+
+    // Only add fallback follow-ups if the AI call timed out (>180s)
+    var elapsedMs = data.elapsed_ms || 0;
+    if (followUps.length < 2 && elapsedMs > 180000) {
+      var drillFallbacks = [
+        { question: "What are the broader implications?", hint: "Impact analysis" },
+        { question: "How does this connect to other recent developments?", hint: "Cross-reference" },
+        { question: "What should we watch for next?", hint: "Forward-looking" },
+      ];
+      while (followUps.length < 2 && drillFallbacks.length > 0) {
+        followUps.push(drillFallbacks.shift());
+      }
+    }
 
     // Store in thread
     _drillThread.push({
       topic: ai.title || topic,
-      summary: ai.summary || "",
-      key_points: ai.key_points || [],
-      related: ai.related || [],
+      question: question || null,
+      ai: ai,
       tokens: data.tokens || 0,
       elapsed_ms: data.elapsed_ms || 0,
-      question: question || null,
+      news_fetched: data.news_fetched || 0,
+      news_sources: newsSources,
+      follow_ups: followUps,
     });
 
-    // Render the completed entry
-    el.className = "drill-entry";
-    const liveTag = data.news_fetched
-      ? ' <span class="drill-live-tag">\ud83d\udd0d ' + data.news_fetched + ' live</span>'
-      : '';
-    let html = '<div class="drill-entry-head">' +
-      '<span class="drill-entry-icon">\ud83e\udde0</span>' +
-      '<span class="drill-entry-topic">' + E(ai.title || topic) + '</span>' +
-      '<span class="drill-entry-meta">' +
-      (data.tokens ? data.tokens.toLocaleString() + ' tok' : '') +
-      (data.elapsed_ms ? ' \u00b7 ' + fmtMs(data.elapsed_ms) : '') +
-      liveTag +
-      '</span></div>';
-
-    if (question) {
-      html += '<div class="drill-entry-question">\ud83d\udcac ' + E(question) + '</div>';
-    }
-
-    if (ai.summary) {
-      html += '<div class="drill-entry-body">' + E(ai.summary) + '</div>';
-    }
-
-    if (ai.key_points && ai.key_points.length) {
-      html += '<div class="drill-entry-points">';
-      ai.key_points.forEach(function(p) {
-        html += '<div class="drill-entry-point">\u2022 ' + E(p) + '</div>';
-      });
-      html += '</div>';
-    }
-
-    if (ai.related && ai.related.length) {
-      html += '<div class="drill-entry-related">';
-      ai.related.forEach(function(r) {
-        html += '<span class="chip" onclick="drillFollowUp(\'' + A(r) + '\')">' + E(r) + '</span>';
-      });
-      html += '</div>';
-    }
-
-    el.innerHTML = html;
-    scrollDrill(el);
+    // Re-render the entire thread as a depth stack
+    renderDrillStack();
 
     if (data.elapsed_ms) {
       toast((data.tokens ? data.tokens.toLocaleString() + " tok \u00b7 " : "") + fmtMs(data.elapsed_ms));
@@ -888,7 +963,7 @@ async function drillAI(topic, question) {
     }
     fetchUsage();
   } catch (err) {
-    const el = $(entryId);
+    var el = $(loadId);
     if (el) {
       el.className = "drill-entry drill-entry-err";
       el.innerHTML = '<div class="drill-entry-body" style="color:var(--rd)">Error: ' + E(err.message) + '</div>';
@@ -896,23 +971,183 @@ async function drillAI(topic, question) {
   }
 
   _drillBusy = false;
+  input = $("drill-followup");
   if (input) { input.disabled = false; input.focus(); }
 }
 
-/** Follow-up: user clicked a related topic chip — drills deeper in-thread */
-function drillFollowUp(topic) {
-  drillAI(topic);
+/** Render the full depth stack — collapsed past levels + expanded current */
+function renderDrillStack() {
+  var thread = $("drill-thread");
+  if (!thread) return;
+
+  var html = "";
+  var lastIdx = _drillThread.length - 1;
+
+  for (var i = 0; i <= lastIdx; i++) {
+    var entry = _drillThread[i];
+    var isCurrent = (i === lastIdx);
+
+    if (!isCurrent) {
+      // Collapsed level — clickable to go back
+      html += '<div class="drill-collapsed" data-depth="' + i + '">' +
+        '<span class="drill-depth-num">' + (i + 1) + '</span>' +
+        '<span class="drill-collapsed-text">' +
+          (entry.question ? E(entry.question) : E(entry.topic)) +
+          ' \u2014 ' + E(truncText(entry.ai.summary || "", 80)) +
+        '</span>' +
+        '<span class="drill-collapsed-back">\u25b4</span>' +
+      '</div>';
+    } else {
+      // Current (expanded) level
+      html += renderDrillEntry(entry, i);
+    }
+  }
+
+  thread.innerHTML = html;
+
+  // Scroll the last entry into view
+  var lastEntry = thread.querySelector('.drill-entry:last-of-type, .drill-paths');
+  if (lastEntry) scrollDrill(lastEntry);
 }
+
+/** Render a fully expanded drill entry with path cards */
+function renderDrillEntry(entry, depth) {
+  var ai = entry.ai || {};
+  var html = '<div class="drill-entry">';
+
+  // Header
+  html += '<div class="drill-entry-head">' +
+    '<span class="drill-depth-num">' + (depth + 1) + '</span>' +
+    '<span class="drill-entry-topic">' + E(ai.title || entry.topic) + '</span>' +
+    '<span class="drill-entry-meta">';
+  if (entry.tokens) html += entry.tokens.toLocaleString() + ' tok';
+  if (entry.elapsed_ms) html += ' \u00b7 ' + fmtMs(entry.elapsed_ms);
+  html += '</span>';
+
+  // Live sources badge (clickable)
+  if (entry.news_fetched > 0 && entry.news_sources && entry.news_sources.length > 0) {
+    html += '<span class="drill-live-tag drill-live-clickable" data-sources=\'' +
+      A(JSON.stringify(entry.news_sources)) + '\'>' +
+      '\ud83d\udd0d ' + entry.news_fetched + ' live</span>';
+  } else if (entry.news_fetched > 0) {
+    html += '<span class="drill-live-tag">\ud83d\udd0d ' + entry.news_fetched + ' live</span>';
+  }
+
+  html += '</div>';
+
+  // Question (if follow-up)
+  if (entry.question) {
+    html += '<div class="drill-entry-question">\ud83d\udcac ' + E(entry.question) + '</div>';
+  }
+
+  // Summary
+  if (ai.summary) {
+    html += '<div class="drill-entry-body">' + E(ai.summary) + '</div>';
+  }
+
+  // Key points
+  if (ai.key_points && ai.key_points.length) {
+    html += '<div class="drill-entry-points">';
+    ai.key_points.forEach(function(p) {
+      html += '<div class="drill-entry-point">\u2022 ' + E(p) + '</div>';
+    });
+    html += '</div>';
+  }
+
+  // Source pills
+  if (entry.news_sources && entry.news_sources.length > 0) {
+    html += '<div class="drill-source-pills">';
+    var seen = {};
+    entry.news_sources.forEach(function(s) {
+      var name = s.source || "Source";
+      if (seen[name]) return;
+      seen[name] = true;
+      var isLive = true;
+      html += '<span class="drill-source-pill' + (isLive ? ' live' : '') + '">' + E(name) + (isLive ? ' (live)' : '') + '</span>';
+    });
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  // Path cards (fortune teller branches)
+  var followUps = entry.follow_ups || ai.follow_ups || [];
+  if (followUps.length > 0) {
+    html += '<div class="drill-paths">';
+    html += '<div class="drill-paths-divider"><div class="drill-paths-line"></div><span class="drill-paths-label label-caps">Go deeper</span><div class="drill-paths-line"></div></div>';
+
+    followUps.forEach(function(f) {
+      var q = typeof f === "string" ? f : (f.question || f);
+      var hint = typeof f === "object" ? (f.hint || "") : "";
+      html += '<div class="drill-path-card" data-question="' + A(q) + '">' +
+        '<div class="drill-path-inner">' +
+        '<div><div class="drill-path-q">' + E(q) + '</div>' +
+        (hint ? '<div class="drill-path-hint">' + E(hint) + '</div>' : '') +
+        '</div><span class="drill-path-arrow">&#x203A;</span></div></div>';
+    });
+
+    html += '</div>';
+  }
+
+  // Also show legacy "related" topics as smaller chips if present
+  var related = ai.related || [];
+  if (related.length > 0 && followUps.length === 0) {
+    html += '<div class="drill-entry-related">';
+    related.forEach(function(r) {
+      html += '<span class="chip drill-related-chip" data-related="' + A(r) + '">' + E(r) + '</span>';
+    });
+    html += '</div>';
+  }
+
+  return html;
+}
+
+/** Click handler: collapsed levels — go back to that depth */
+document.addEventListener("click", function(e) {
+  var collapsed = e.target.closest(".drill-collapsed[data-depth]");
+  if (collapsed) {
+    var depth = parseInt(collapsed.dataset.depth);
+    // Trim thread to this depth (keep 0..depth inclusive)
+    _drillThread = _drillThread.slice(0, depth + 1);
+    renderDrillStack();
+    return;
+  }
+
+  // Click handler: path cards — drill deeper
+  var pathCard = e.target.closest(".drill-path-card[data-question]");
+  if (pathCard) {
+    var question = pathCard.dataset.question;
+    drillAI(_drillTopic, question);
+    return;
+  }
+
+  // Click handler: related chips (legacy fallback)
+  var relChip = e.target.closest(".drill-related-chip[data-related]");
+  if (relChip) {
+    drillAI(relChip.dataset.related);
+    return;
+  }
+
+  // Click handler: live sources badge — open sources modal
+  var liveTag = e.target.closest(".drill-live-clickable[data-sources]");
+  if (liveTag) {
+    e.stopPropagation();
+    try {
+      var sources = JSON.parse(liveTag.dataset.sources);
+      openSourcesModal(sources);
+    } catch (_) {}
+    return;
+  }
+});
 
 /** Follow-up: user typed a question in the input */
 function drillAskFollowUp() {
-  const input = $("drill-followup");
+  var input = $("drill-followup");
   if (!input) return;
-  const q = input.value.trim();
+  var q = input.value.trim();
   if (!q) return;
   input.value = "";
-  const topic = _drillThread.length > 0 ? _drillThread[0].topic : "this article";
-  drillAI(topic, q);
+  drillAI(_drillTopic, q);
 }
 
 function renderDrillInput() {
@@ -925,20 +1160,57 @@ function renderDrillInput() {
 }
 
 function scrollDrill(el) {
-  // Scroll the drill panel to show the new entry
-  const dp = el.closest(".dp");
+  var dp = el.closest(".dp");
   if (dp) {
     setTimeout(function() { dp.scrollTo({ top: dp.scrollHeight, behavior: "smooth" }); }, 60);
   }
 }
 
-function closeDrill(event) {
-  if (!event || event.target.id === "ov") {
-    $("ov").classList.remove("open");
-    _drillBusy = false;
-  }
+function closeDrill() {
+  $("ov").classList.remove("open");
+  _drillBusy = false;
 }
 const cdrill = closeDrill;
+
+/** Truncate text for collapsed view */
+function truncText(s, max) {
+  if (!s || s.length <= max) return s || "";
+  return s.substring(0, max) + "\u2026";
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOURCES MODAL
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function openSourcesModal(sources) {
+  var overlay = $("src-ov");
+  var list = $("src-list");
+
+  var html = "";
+  sources.forEach(function(s) {
+    var source = s.source || "Source";
+    var title = s.title || "Untitled";
+    var link = s.link || "";
+    html += '<div class="src-item">' +
+      '<div class="src-item-source">' + E(source) + '</div>' +
+      '<div class="src-item-title">' + E(title) + '</div>' +
+      (link ? '<a class="src-item-link" href="' + E(link) + '" target="_blank">' + E(link.substring(0, 80)) + (link.length > 80 ? '\u2026' : '') + ' \u2192</a>' : '') +
+    '</div>';
+  });
+
+  if (!sources.length) {
+    html = '<div class="src-empty">No live sources available.</div>';
+  }
+
+  list.innerHTML = html;
+  overlay.classList.add("open");
+}
+
+function closeSources(event) {
+  if (!event || event.target.id === "src-ov") {
+    $("src-ov").classList.remove("open");
+  }
+}
 
 
 // ═══════════════════════════════════════════════════════════════════════════════

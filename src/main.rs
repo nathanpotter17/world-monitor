@@ -1196,12 +1196,15 @@ fn ai_call(cfg: &Config, system: &str, user: &str) -> Result<AiResp, String> {
     let t0 = Instant::now();
     let body = format!(
         r#"{{"model":"local","messages":[{{"role":"system","content":{}}},{{"role":"user","content":{}}}],"max_tokens":1024,"temperature":{:.2},"top_p":{:.2},"repeat_penalty":{:.2},"stream":false}}"#,
-        jesc(system),
-        jesc(user),
-        cfg.active_temp,
-        cfg.active_top_p,
-        cfg.active_repeat_penalty
+        jesc(system), jesc(user),
+        cfg.active_temp, cfg.active_top_p, cfg.active_repeat_penalty
     );
+
+    // Write body to a temp file to avoid Windows CLI length limit (os error 206)
+    let tmp_path = std::env::temp_dir().join(format!("wm_req_{}.json", now_ts()));
+    fs::write(&tmp_path, &body).map_err(|e| format!("tmp write: {e}"))?;
+    let tmp_str = tmp_path.to_string_lossy().to_string();
+    let data_arg = format!("@{}", tmp_str);
 
     let endpoint = cfg.llama_endpoint();
     let o = Command::new(curl_cmd())
@@ -1209,10 +1212,13 @@ fn ai_call(cfg: &Config, system: &str, user: &str) -> Result<AiResp, String> {
             "-s", "-X", "POST", &endpoint,
             "-H", "content-type: application/json",
             "--max-time", "120",
-            "-d", &body,
+            "-d", &data_arg,   // ← reads from file instead
         ])
         .output()
-        .map_err(|e| format!("curl: {e}"))?;
+        .map_err(|e| format!("curl: {e}"));
+
+    let _ = fs::remove_file(&tmp_path); // clean up regardless
+    let o = o?;
 
     let elapsed_ms = t0.elapsed().as_millis() as u64;
 
@@ -1368,7 +1374,7 @@ fn jobj(t: &str) -> String {
                     '}' => {
                         d -= 1;
                         if d == 0 {
-                            return t[s..s + i + 1].to_string();
+                            return sanitize_json(&t[s..s + i + 1]);
                         }
                     }
                     _ => {}
@@ -1377,6 +1383,181 @@ fn jobj(t: &str) -> String {
         }
     }
     "{}".into()
+}
+
+/// Escape control characters inside JSON string values so the result is
+/// safe to embed in an outer JSON response. Walks through the string
+/// tracking whether we're inside a quoted value and replaces raw control
+/// chars (0x00-0x1F) with their \\uXXXX escapes. Already-escaped
+/// sequences like \\n are left alone.
+fn sanitize_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 64);
+    let mut in_str = false;
+    let mut esc = false;
+
+    for c in s.chars() {
+        if esc {
+            out.push(c);
+            esc = false;
+            continue;
+        }
+        if c == '\\' && in_str {
+            out.push(c);
+            esc = true;
+            continue;
+        }
+        if c == '"' {
+            in_str = !in_str;
+            out.push(c);
+            continue;
+        }
+        if in_str && (c as u32) < 0x20 {
+            // Replace raw control character with JSON escape
+            match c {
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                _ => out.push_str(&format!("\\u{:04x}", c as u32)),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Extract follow_ups array from raw AI text. Uses jget to pull
+/// question/hint pairs from each object in the follow_ups array.
+/// Returns vec of (question, hint) pairs.
+fn extract_follow_ups(text: &str) -> Vec<(String, String)> {
+    let mut results = Vec::new();
+
+    // Find the follow_ups array in the text
+    let marker = "\"follow_ups\"";
+    let pos = match text.find(marker) {
+        Some(p) => p + marker.len(),
+        None => return results,
+    };
+
+    let rest = &text[pos..];
+    // Skip to the opening [
+    let arr_start = match rest.find('[') {
+        Some(p) => p,
+        None => return results,
+    };
+    let arr_text = &rest[arr_start..];
+
+    // Find each { ... } object within the array
+    let mut depth = 0;
+    let mut obj_start = None;
+
+    for (i, c) in arr_text.char_indices() {
+        match c {
+            '[' if depth == 0 => depth = 1,
+            ']' if depth == 1 => break,
+            '{' if depth == 1 => {
+                depth = 2;
+                obj_start = Some(i);
+            }
+            '}' if depth == 2 => {
+                if let Some(s) = obj_start {
+                    let obj = &arr_text[s..=i];
+                    let q = jget(obj, "question").unwrap_or_default();
+                    let h = jget(obj, "hint").unwrap_or_default();
+                    if !q.is_empty() {
+                        results.push((q, h));
+                    }
+                }
+                depth = 1;
+                obj_start = None;
+            }
+            '{' if depth >= 2 => depth += 1,
+            '}' if depth > 2 => depth -= 1,
+            _ => {}
+        }
+    }
+
+    results
+}
+
+/// Extract a JSON array of strings from raw AI text by key name.
+/// e.g. extract_string_array(text, "key_points") finds "key_points":["a","b","c"]
+fn extract_string_array(text: &str, key: &str) -> Vec<String> {
+    let mut results = Vec::new();
+    let marker = format!("\"{}\"", key);
+    let pos = match text.find(&marker) {
+        Some(p) => p + marker.len(),
+        None => return results,
+    };
+
+    let rest = &text[pos..];
+    let arr_start = match rest.find('[') {
+        Some(p) => p,
+        None => return results,
+    };
+    let arr_text = &rest[arr_start..];
+
+    // Find the closing ]
+    let mut depth = 0;
+    let mut arr_end = arr_text.len();
+    for (i, c) in arr_text.char_indices() {
+        match c {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    arr_end = i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Extract string values from within the array
+    let inner = &arr_text[1..arr_end];
+    // Use a simple state machine to find quoted strings
+    let mut in_str = false;
+    let mut esc = false;
+    let mut current = String::new();
+
+    for c in inner.chars() {
+        if esc {
+            // Handle escape sequences — decode them
+            match c {
+                'n' => current.push('\n'),
+                'r' => current.push('\r'),
+                't' => current.push('\t'),
+                '"' => current.push('"'),
+                '\\' => current.push('\\'),
+                _ => { current.push('\\'); current.push(c); }
+            }
+            esc = false;
+            continue;
+        }
+        if c == '\\' && in_str {
+            esc = true;
+            continue;
+        }
+        if c == '"' {
+            if in_str {
+                // End of string
+                if !current.is_empty() {
+                    results.push(current.clone());
+                }
+                current.clear();
+                in_str = false;
+            } else {
+                in_str = true;
+            }
+            continue;
+        }
+        if in_str {
+            current.push(c);
+        }
+    }
+
+    results
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1401,8 +1582,8 @@ fn url_encode(s: &str) -> String {
 }
 
 /// Fetch up to `max_items` headlines from Google News RSS for `query`.
-/// Returns (formatted text block, number of items fetched).
-fn fetch_fresh_news(query: &str, timeout: u64, max_items: usize) -> (String, usize) {
+/// Returns (formatted text block, number of items fetched, vec of (source, title, link)).
+fn fetch_fresh_news(query: &str, timeout: u64, max_items: usize) -> (String, usize, Vec<(String, String, String)>) {
     let encoded = url_encode(query);
     let url = format!(
         "https://news.google.com/rss/search?q={}&hl=en-US&gl=US&ceid=US:en",
@@ -1422,19 +1603,21 @@ fn fetch_fresh_news(query: &str, timeout: u64, max_items: usize) -> (String, usi
     eprintln!("[live-search] {}", msg);
 
     if items.is_empty() {
-        return (String::new(), 0);
+        return (String::new(), 0, vec![]);
     }
 
     let n = items.len().min(max_items);
     let mut block = String::new();
+    let mut sources = Vec::new();
     for (i, item) in items.iter().take(n).enumerate() {
         block.push_str(&format!("{}. [{}] {}", i + 1, item.source, item.title));
         if !item.desc.is_empty() {
             block.push_str(&format!(" — {}", trunc(&item.desc, 120)));
         }
         block.push('\n');
+        sources.push((item.source.clone(), item.title.clone(), item.link.clone()));
     }
-    (block, n)
+    (block, n, sources)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1766,13 +1949,10 @@ fn do_drill_ai(st: &Shared, body: &str) -> String {
     let max_chars = ((cfg.active_ctx as usize).saturating_sub(1500)) * 4;
 
     // ── Live search injection ────────────────────────────────────────────────
-    // Fetch up to 6 fresh headlines from Google News RSS when a search_query
-    // is provided. This runs synchronously (same curl binary) before the AI
-    // call so the model always gets grounded, current context.
-    let (fresh_news_text, fresh_count) = if !search_query.is_empty() {
+    let (fresh_news_text, fresh_count, fresh_sources) = if !search_query.is_empty() {
         fetch_fresh_news(&search_query, cfg.timeout, 6)
     } else {
-        (String::new(), 0)
+        (String::new(), 0, vec![])
     };
 
     let fresh_section = if !fresh_news_text.is_empty() {
@@ -1790,40 +1970,86 @@ fn do_drill_ai(st: &Shared, body: &str) -> String {
         format!("\n\nPrior analysis for context (build on this, don't repeat it):\n{}\n", trunc(&context, max_chars / 3))
     };
 
+    let follow_up_instruction = "\n\nThe JSON must include a \"follow_ups\" array with EXACTLY 2-3 objects. Each has \"question\" (a specific follow-up the reader would ask next) and \"hint\" (2-5 word angle). Make them specific to your analysis, not generic.";
+
     let prompt = if !question.is_empty() {
-        // Follow-up question — inject fresh news + article text
         let text_section = if text.is_empty() { String::new() }
             else { format!("\n\nArticle text:\n{}\n", trunc(&text, max_chars / 2)) };
         format!(
             "Topic: \"{topic}\"{ctx_section}{text_section}{fresh_section}\n\
              User follow-up question: {question}\n\n\
-             Answer concisely, incorporating any relevant live search results above. Return JSON only:\n\
-             {{\"title\":\"short title for your answer\",\"summary\":\"your answer (1-3 paragraphs)\",\"key_points\":[\"...\"],\"related\":[\"topic1\",\"topic2\"]}}"
+             Answer concisely, incorporating any relevant live search results above.\n\
+             Respond with a JSON object: {{\"title\":\"short title\",\"summary\":\"your answer\",\"key_points\":[\"...\"],\"follow_ups\":[...]}}{follow_up_instruction}\n\
+             Return ONLY the JSON. No markdown fences."
         )
     } else if text.is_empty() {
-        // No article text — search results are the primary source
         format!(
             "Provide a concise analysis of this news topic: \"{topic}\".{ctx_section}{fresh_section}\n\n\
-             Return JSON only:\n{{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"related\":[\"...\",\"...\"]}}"
+             Respond with a JSON object: {{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"follow_ups\":[...]}}{follow_up_instruction}\n\
+             Return ONLY the JSON. No markdown fences."
         )
     } else {
-        // Full article scrape + optional live supplement
         let text = trunc(&text, max_chars);
         format!(
             "Summarize this article titled \"{topic}\":{ctx_section}{fresh_section}\n\n{text}\n\n\
-             Return JSON only:\n{{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"related\":[\"...\",\"...\"]}}"
+             Respond with a JSON object: {{\"title\":\"...\",\"summary\":\"2-3 paragraph analysis\",\"key_points\":[\"...\"],\"follow_ups\":[...]}}{follow_up_instruction}\n\
+             Return ONLY the JSON. No markdown fences."
         )
     };
 
-    match ai_call(&cfg, "Concise news analyst. JSON only, no markdown fences.", &prompt) {
+    // Build news_sources JSON array
+    let mut ns_json = String::from("[");
+    for (i, (src, title, link)) in fresh_sources.iter().enumerate() {
+        if i > 0 { ns_json.push(','); }
+        ns_json.push_str(&format!(
+            r#"{{"source":"{}","title":"{}","link":"{}"}}"#,
+            jval(src), jval(title), jval(link)
+        ));
+    }
+    ns_json.push(']');
+
+    match ai_call(&cfg, "Concise news analyst. Return ONLY valid JSON, no markdown fences. Never use literal newlines inside JSON string values. Include follow_ups that are SPECIFIC to your analysis — never use generic placeholders.", &prompt) {
         Ok(r) => {
             st.lock().unwrap().usage.add(r.tokens);
+
+            // Extract fields individually to avoid double-escaping issues
+            let title = jget(&r.text, "title").unwrap_or_default();
+            let summary = jget(&r.text, "summary").unwrap_or_else(|| {
+                // Fallback: use raw text cleaned up
+                r.text.trim().to_string()
+            });
+            let key_points = extract_string_array(&r.text, "key_points");
+            let follow_ups = extract_follow_ups(&r.text);
+
+            // Build key_points JSON array
+            let mut kp_json = String::from("[");
+            for (i, kp) in key_points.iter().enumerate() {
+                if i > 0 { kp_json.push(','); }
+                kp_json.push_str(&format!("\"{}\"", jval(kp)));
+            }
+            kp_json.push(']');
+
+            // Build follow_ups JSON array
+            let mut fu_json = String::from("[");
+            for (i, (q, h)) in follow_ups.iter().enumerate() {
+                if i > 0 { fu_json.push(','); }
+                fu_json.push_str(&format!(
+                    r#"{{"question":"{}","hint":"{}"}}"#,
+                    jval(q), jval(h)
+                ));
+            }
+            fu_json.push(']');
+
             format!(
-                r#"{{"ai":{},"tokens":{},"elapsed_ms":{},"news_fetched":{}}}"#,
-                jobj(&r.text),
+                r#"{{"ai":{{"title":"{}","summary":"{}","key_points":{},"follow_ups":{}}},"tokens":{},"elapsed_ms":{},"news_fetched":{},"news_sources":{}}}"#,
+                jval(&title),
+                jval(&summary),
+                kp_json,
+                fu_json,
                 r.tokens,
                 r.elapsed_ms,
-                fresh_count
+                fresh_count,
+                ns_json
             )
         }
         Err(e) => {
@@ -1914,11 +2140,24 @@ fn do_ask(st: &Shared, body: &str) -> String {
     let cat_names: Vec<&str> = categories.iter().map(|c| c.name.as_str()).collect();
     let system = format!(
         "You are a news analyst. You have {} headlines from feeds ({}).\
-         Answer based ONLY on the headlines. Be concise. Cite sources. Plain text only.",
+         Answer based ONLY on the headlines. Be concise. Cite sources.\
+         Return valid JSON only, no markdown fences. Never use literal newlines inside string values.\
+         Your follow_ups must be SPECIFIC questions derived from your analysis — never copy placeholder text.",
         n_ctx,
         cat_names.join(", ")
     );
-    let prompt = format!("Headlines:\n\n{context}\n\nQuestion: {query}");
+    let prompt = format!(
+        "Headlines:\n\n{context}\n\nQuestion: {query}\n\n\
+         Respond with a JSON object containing two fields:\n\
+         1. \"answer\" — your analysis (1-3 paragraphs, cite feed sources inline)\n\
+         2. \"follow_ups\" — an array of EXACTLY 3 objects, each with \"question\" and \"hint\" fields\n\n\
+         The follow_ups must be SPECIFIC to the headlines you just analyzed. They should anticipate what the reader wants to know next. Cross-reference categories when possible.\n\n\
+         Example of good follow_ups for a tech summary:\n\
+         [{{\"question\":\"How might the new EU chip export rules affect the AI model releases announced this week?\",\"hint\":\"Geopolitics meets Tech\"}},\n\
+          {{\"question\":\"Which of these security vulnerabilities poses the biggest risk to enterprise users?\",\"hint\":\"Risk assessment\"}},\n\
+          {{\"question\":\"Are any of these market movements correlated with the tech announcements?\",\"hint\":\"Markets crossover\"}}]\n\n\
+         Return ONLY the JSON object. No markdown fences. No text outside the JSON."
+    );
 
     eprintln!("[ask] {} ({}/{} items, ~{}ch)", query, n_ctx, filtered.len(), context.len());
 
@@ -1926,16 +2165,51 @@ fn do_ask(st: &Shared, body: &str) -> String {
         Ok(r) => {
             st.lock().unwrap().usage.add(r.tokens);
             eprintln!("[ask] {} tok {:.1}s", r.tokens, r.elapsed_ms as f64 / 1000.0);
+
+            // Extract fields individually using jget (which properly unescapes)
+            // rather than embedding the raw jobj blob
+            let answer = jget(&r.text, "answer")
+                .unwrap_or_else(|| {
+                    // Model didn't return valid JSON — clean up raw text
+                    let raw = r.text.trim();
+                    // Strip markdown fences if present
+                    let raw = raw.strip_prefix("```json").or(raw.strip_prefix("```")).unwrap_or(raw);
+                    let raw = raw.strip_suffix("```").unwrap_or(raw);
+                    // Strip any JSON wrapper if the model wrapped but jget failed
+                    let raw = raw.trim();
+                    // Remove leading { and trailing } if it looks like JSON wrapping
+                    if raw.starts_with('{') {
+                        // Try to find content between first ":" and last "}"
+                        raw.to_string()
+                    } else {
+                        raw.to_string()
+                    }
+                });
+
+            let follow_ups = extract_follow_ups(&r.text);
+
+            // Build clean response with properly escaped fields
+            let mut fu_json = String::from("[");
+            for (i, (q, h)) in follow_ups.iter().enumerate() {
+                if i > 0 { fu_json.push(','); }
+                fu_json.push_str(&format!(
+                    r#"{{"question":"{}","hint":"{}"}}"#,
+                    jval(q), jval(h)
+                ));
+            }
+            fu_json.push(']');
+
             format!(
-                r#"{{"answer":"{}","tokens":{},"elapsed_ms":{}}}"#,
-                jval(&r.text),
+                r#"{{"ai":{{"answer":"{}","follow_ups":{}}},"tokens":{},"elapsed_ms":{}}}"#,
+                jval(&answer),
+                fu_json,
                 r.tokens,
                 r.elapsed_ms
             )
         }
         Err(e) => {
             eprintln!("[ask] err: {e}");
-            format!(r#"{{"answer":"Error: {}","tokens":0,"elapsed_ms":0}}"#, jval(&e))
+            format!(r#"{{"ai":{{"answer":"Error: {}"}},"tokens":0,"elapsed_ms":0}}"#, jval(&e))
         }
     }
 }
